@@ -114,6 +114,134 @@ function Test-Number {
     return $Value -match "^\d+$"
 }
 
+function Test-InteractiveConsole {
+    try {
+        return (-not [Console]::IsInputRedirected) -and (-not [Console]::IsOutputRedirected)
+    } catch {
+        return $false
+    }
+}
+
+function Get-MenuItemLabel {
+    param($Item)
+    if ($null -eq $Item) { return "" }
+    if ($Item.PSObject.Properties["Label"]) { return [string]$Item.Label }
+    return [string]$Item
+}
+
+function Get-MenuItemValue {
+    param($Item)
+    if ($null -eq $Item) { return $null }
+    if ($Item.PSObject.Properties["Value"]) { return $Item.Value }
+    return $Item
+}
+
+function Write-MenuLine {
+    param(
+        [string]$Text,
+        [switch]$Selected
+    )
+
+    $width = 100
+    try { $width = [Math]::Max(20, [Console]::WindowWidth - 1) } catch {}
+    if ($Text.Length -gt $width) {
+        $Text = $Text.Substring(0, $width - 3) + "..."
+    }
+    $line = $Text.PadRight($width)
+
+    if ($Selected) {
+        Write-Host $line -ForegroundColor Black -BackgroundColor Cyan
+    } else {
+        Write-Host $line -ForegroundColor Gray
+    }
+}
+
+function Clear-ConsoleBlock {
+    param(
+        [int]$StartRow,
+        [int]$LineCount = 60
+    )
+
+    try {
+        $width = [Math]::Max(1, [Console]::WindowWidth - 1)
+        $endRow = [Math]::Min([Console]::BufferHeight - 1, $StartRow + $LineCount)
+        for ($row = $StartRow; $row -lt $endRow; $row++) {
+            [Console]::SetCursorPosition(0, $row)
+            [Console]::Write((" " * $width))
+        }
+        [Console]::SetCursorPosition(0, $StartRow)
+    } catch {}
+}
+
+function Read-MenuSelection {
+    param(
+        [string]$Title,
+        [object[]]$Items,
+        [int]$DefaultIndex = 0,
+        [string]$Prompt = "Use Up/Down arrows, Enter to select, Esc to cancel. You can also press a number."
+    )
+
+    $itemsArray = @($Items)
+    if ($itemsArray.Count -eq 0) { return $null }
+
+    if ($DefaultIndex -lt 0 -or $DefaultIndex -ge $itemsArray.Count) { $DefaultIndex = 0 }
+
+    if (!(Test-InteractiveConsole)) {
+        if (![string]::IsNullOrWhiteSpace($Title)) { Write-Host $Title -ForegroundColor Yellow }
+        for ($i = 0; $i -lt $itemsArray.Count; $i++) {
+            Write-Host ("  {0,2}. {1}" -f ($i + 1), (Get-MenuItemLabel $itemsArray[$i])) -ForegroundColor Green
+        }
+        $selection = Read-Host "Select number"
+        if (!($selection -match '^\d+$')) { return $null }
+        $index = [int]$selection - 1
+        if ($index -lt 0 -or $index -ge $itemsArray.Count) { return $null }
+        return (Get-MenuItemValue $itemsArray[$index])
+    }
+
+    if (![string]::IsNullOrWhiteSpace($Title)) { Write-Host "`n$Title" -ForegroundColor Yellow }
+    if (![string]::IsNullOrWhiteSpace($Prompt)) { Write-Host $Prompt -ForegroundColor DarkGray }
+
+    $selected = $DefaultIndex
+    $menuTop = [Console]::CursorTop
+
+    while ($true) {
+        [Console]::SetCursorPosition(0, $menuTop)
+        for ($i = 0; $i -lt $itemsArray.Count; $i++) {
+            $prefix = if ($i -eq $selected) { ">" } else { " " }
+            $label = Get-MenuItemLabel $itemsArray[$i]
+            Write-MenuLine -Text ("{0} {1,2}. {2}" -f $prefix, ($i + 1), $label) -Selected:($i -eq $selected)
+        }
+
+        $key = [Console]::ReadKey($true)
+        switch ($key.Key) {
+            ([ConsoleKey]::UpArrow) {
+                $selected = ($selected - 1 + $itemsArray.Count) % $itemsArray.Count
+                continue
+            }
+            ([ConsoleKey]::DownArrow) {
+                $selected = ($selected + 1) % $itemsArray.Count
+                continue
+            }
+            ([ConsoleKey]::Enter) {
+                [Console]::SetCursorPosition(0, $menuTop + $itemsArray.Count)
+                return (Get-MenuItemValue $itemsArray[$selected])
+            }
+            ([ConsoleKey]::Escape) {
+                [Console]::SetCursorPosition(0, $menuTop + $itemsArray.Count)
+                return $null
+            }
+        }
+
+        if ($key.KeyChar -match '^[1-9]$') {
+            $index = [int]([string]$key.KeyChar) - 1
+            if ($index -ge 0 -and $index -lt $itemsArray.Count) {
+                [Console]::SetCursorPosition(0, $menuTop + $itemsArray.Count)
+                return (Get-MenuItemValue $itemsArray[$index])
+            }
+        }
+    }
+}
+
 function Ensure-ProfilesDirectory {
     if (!(Test-Path -LiteralPath $script:PROFILES_DIR)) {
         New-Item -ItemType Directory -Force -Path $script:PROFILES_DIR | Out-Null
@@ -170,9 +298,13 @@ function Resolve-ProfileEntry {
     }
 
     if ($Prompt -or [string]::IsNullOrWhiteSpace($Selection)) {
-        Show-ProfileMenu $entries
-        $Selection = Read-Host "Select profile number"
-        if ([string]::IsNullOrWhiteSpace($Selection)) { return $null }
+        $items = @($entries | ForEach-Object {
+            [pscustomobject]@{
+                Label = ("{0}  [{1}]" -f $_.Name, $_.DefaultModel)
+                Value = $_
+            }
+        })
+        return (Read-MenuSelection -Title "Available profiles" -Items $items)
     }
 
     if (Test-Number $Selection) {
@@ -214,8 +346,17 @@ function Resolve-ModelName {
     )
 
     if ($Prompt -and $ProfileEntry.Models.Count -gt 1 -and [string]::IsNullOrWhiteSpace($Selection)) {
-        Show-ModelMenu $ProfileEntry
-        $Selection = Read-Host "Select model number or press Enter for default [$($ProfileEntry.DefaultModel)]"
+        $defaultIndex = [array]::IndexOf(@($ProfileEntry.Models), $ProfileEntry.DefaultModel)
+        if ($defaultIndex -lt 0) { $defaultIndex = 0 }
+        $items = @()
+        foreach ($modelName in @($ProfileEntry.Models)) {
+            $suffix = if ($modelName -eq $ProfileEntry.DefaultModel) { " (default)" } else { "" }
+            $items += [pscustomobject]@{
+                Label = "$modelName$suffix"
+                Value = $modelName
+            }
+        }
+        return (Read-MenuSelection -Title "Available models for $($ProfileEntry.Name)" -Items $items -DefaultIndex $defaultIndex)
     }
 
     if ([string]::IsNullOrWhiteSpace($Selection)) {
@@ -453,14 +594,14 @@ function cc-status {
 
 function Start-ProfileManager {
     while ($true) {
-        Clear-Host
-        Write-Host "--- Profile Management ($PROFILES_DIR) ---" -ForegroundColor Cyan
-        Write-Host "1. List Profiles"
-        Write-Host "2. Add New Profile"
-        Write-Host "3. Edit Existing Profile"
-        Write-Host "4. Delete Profile"
-        Write-Host "5. Exit Management"
-        $choice = Read-Host "`nSelect an option"
+        $choice = Read-MenuSelection -Title "--- Profile Management ($PROFILES_DIR) ---" -Items @(
+            [pscustomobject]@{ Label = "List Profiles"; Value = "1" }
+            [pscustomobject]@{ Label = "Add New Profile"; Value = "2" }
+            [pscustomobject]@{ Label = "Edit Existing Profile"; Value = "3" }
+            [pscustomobject]@{ Label = "Delete Profile"; Value = "4" }
+            [pscustomobject]@{ Label = "Exit Management"; Value = "5" }
+        )
+        if (!$choice) { return }
         
         switch ($choice) {
             "1" { 
@@ -593,35 +734,24 @@ function Select-ExistingProxyInteractive {
         return $null
     }
 
-    Write-Host "`nExisting proxies:" -ForegroundColor Yellow
-    foreach ($proxy in $proxyEntries) {
-        $portText = if ($proxy.SuggestedPort) { " [port $($proxy.SuggestedPort)]" } else { "" }
-        Write-Host ("  {0}. {1}{2}" -f $proxy.Index, $proxy.Name, $portText) -ForegroundColor Cyan
-    }
-
-    $selection = Read-Host "Select proxy number"
-    if (!($selection -match '^\d+$')) {
-        Write-Host "Invalid proxy selection." -ForegroundColor Red
-        return $null
-    }
-
-    $selected = $proxyEntries | Where-Object { $_.Index -eq [int]$selection } | Select-Object -First 1
-    if (!$selected) {
-        Write-Host "Proxy number '$selection' not found." -ForegroundColor Red
-        return $null
-    }
-
-    return $selected
+    $items = @($proxyEntries | ForEach-Object {
+        $portText = if ($_.SuggestedPort) { " [port $($_.SuggestedPort)]" } else { "" }
+        [pscustomobject]@{
+            Label = "$($_.Name)$portText"
+            Value = $_
+        }
+    })
+    return (Read-MenuSelection -Title "Existing proxies" -Items $items)
 }
 
 function Set-ProfileProxyInteractive {
     param($profile)
 
-    Write-Host "`nProxy options:" -ForegroundColor Yellow
-    Write-Host "1. Pick existing proxy"
-    Write-Host "2. Enter custom proxy path"
-    $proxyMode = Read-Host "Select proxy option [1]"
-    if ([string]::IsNullOrWhiteSpace($proxyMode)) { $proxyMode = "1" }
+    $proxyMode = Read-MenuSelection -Title "Proxy options" -Items @(
+        [pscustomobject]@{ Label = "Pick existing proxy"; Value = "1" }
+        [pscustomobject]@{ Label = "Enter custom proxy path"; Value = "2" }
+    )
+    if ([string]::IsNullOrWhiteSpace($proxyMode)) { return }
 
     if ($proxyMode -eq "1") {
         $selectedProxy = Select-ExistingProxyInteractive
@@ -643,12 +773,21 @@ function Set-ProfileProxyInteractive {
     Write-Host "Invalid proxy option. Skipping proxy setup." -ForegroundColor Yellow
 }
 
+function Select-ProviderInteractive {
+    $visible = @(Get-ProviderRegistry | Where-Object { $_.Id -ne "huggingface" -and $_.Id -ne "nvidia" })
+    $items = @($visible | ForEach-Object {
+        [pscustomobject]@{
+            Label = ("{0} ({1}) - {2}" -f $_.Name, $_.Id, $_.Mode)
+            Value = $_
+        }
+    })
+    return (Read-MenuSelection -Title "Select provider" -Items $items)
+}
+
 function Add-ProfileInteractive {
     Write-Host "`n--- Add New Profile ---" -ForegroundColor Cyan
     Ensure-ProfilesDirectory
-    Show-ProviderMenu
-    $providerSelection = Read-Host "Provider number or name"
-    $provider = Resolve-ProviderSelection $providerSelection
+    $provider = Select-ProviderInteractive
     if (!$provider) {
         Write-Host "Invalid provider selection." -ForegroundColor Red
         Read-Host "Press Enter to continue"
@@ -755,15 +894,20 @@ function Edit-ProfileInteractive {
         return
     }
     
-    Show-ProfileMenu $entries
     if ($script:__EditProfileSelection) {
         $sel = "$script:__EditProfileSelection"
         Remove-Variable -Name __EditProfileSelection -Scope Script -ErrorAction SilentlyContinue
+        if (!($sel -match '^\d+$')) { return }
+        $entry = $entries | Where-Object { $_.Index -eq [int]$sel } | Select-Object -First 1
     } else {
-        $sel = Read-Host "`nEnter profile number to edit"
+        $items = @($entries | ForEach-Object {
+            [pscustomobject]@{
+                Label = ("{0}  [{1}]" -f $_.Name, $_.DefaultModel)
+                Value = $_
+            }
+        })
+        $entry = Read-MenuSelection -Title "Select profile to edit" -Items $items
     }
-    if (!($sel -match '^\d+$')) { return }
-    $entry = $entries | Where-Object { $_.Index -eq [int]$sel } | Select-Object -First 1
     if (!$entry) { return }
     
     $Path = $entry.Path
@@ -822,11 +966,13 @@ function Edit-ProfileInteractive {
     while ($true) {
         Write-Host "`nCurrent Models: $($profile.Models -join ', ')" -ForegroundColor Yellow
         Write-Host "Default Model: $($profile.DefaultModel)" -ForegroundColor Green
-        Write-Host "1. Add Model"
-        Write-Host "2. Remove Model"
-        Write-Host "3. Set Default Model"
-        Write-Host "4. Done with Models"
-        $mSel = Read-Host "Select option"
+        $mSel = Read-MenuSelection -Title "Model edit options" -Items @(
+            [pscustomobject]@{ Label = "Add Model"; Value = "1" }
+            [pscustomobject]@{ Label = "Remove Model"; Value = "2" }
+            [pscustomobject]@{ Label = "Set Default Model"; Value = "3" }
+            [pscustomobject]@{ Label = "Done with Models"; Value = "4" }
+        )
+        if (!$mSel) { break }
         
         switch ($mSel) {
             "1" {
@@ -864,10 +1010,13 @@ function Delete-ProfileInteractive {
         return
     }
     
-    Show-ProfileMenu $entries
-    $sel = Read-Host "`nEnter profile number to delete"
-    if (!($sel -match '^\d+$')) { return }
-    $entry = $entries | Where-Object { $_.Index -eq [int]$sel } | Select-Object -First 1
+    $items = @($entries | ForEach-Object {
+        [pscustomobject]@{
+            Label = ("{0}  [{1}]" -f $_.Name, $_.DefaultModel)
+            Value = $_
+        }
+    })
+    $entry = Read-MenuSelection -Title "Select profile to delete" -Items $items
     if (!$entry) { return }
     
     $confirm = Read-Host "Are you sure you want to delete profile '$($entry.Name)'? (y/N)"
@@ -1066,19 +1215,54 @@ function Write-ManageHelpTab {
     }
 }
 
-function Show-ManageHelp {
-    param([string]$Page = "general")
-    $normalized = $Page.ToLowerInvariant()
-    if ($normalized -notin @("general", "commands", "uninstall")) { $normalized = "general" }
+function Get-ManageHelpPages {
+    return @("general", "commands", "uninstall")
+}
+
+function Normalize-ManageHelpPage {
+    param([string]$Page)
+    $normalized = if ($Page) { $Page.ToLowerInvariant() } else { "general" }
+    if ($normalized -notin @(Get-ManageHelpPages)) { return "general" }
+    return $normalized
+}
+
+function Write-ManageHelpHeader {
+    param(
+        [string]$Page,
+        [switch]$Interactive
+    )
 
     Write-Host ""
     Write-Host " Help " -ForegroundColor Cyan -NoNewline
-    Write-ManageHelpTab -Text "General" -Page $normalized -Target "general"
+    if ($Interactive) {
+        Write-Host " [<] " -ForegroundColor Black -BackgroundColor DarkGray -NoNewline
+        Write-Host " " -NoNewline
+    }
+    Write-ManageHelpTab -Text "General" -Page $Page -Target "general"
     Write-Host " " -NoNewline
-    Write-ManageHelpTab -Text "Commands" -Page $normalized -Target "commands"
+    Write-ManageHelpTab -Text "Commands" -Page $Page -Target "commands"
     Write-Host " " -NoNewline
-    Write-ManageHelpTab -Text "Uninstall" -Page $normalized -Target "uninstall"
+    Write-ManageHelpTab -Text "Uninstall" -Page $Page -Target "uninstall"
+    if ($Interactive) {
+        Write-Host " " -NoNewline
+        Write-Host " [>] " -ForegroundColor Black -BackgroundColor DarkGray -NoNewline
+    }
     Write-Host "`n"
+
+    if ($Interactive) {
+        Write-Host "Use Left/Right arrows to switch pages. Press Q, Esc, or Enter to close." -ForegroundColor DarkGray
+        Write-Host ""
+    }
+}
+
+function Show-ManageHelpPage {
+    param(
+        [string]$Page,
+        [switch]$Interactive
+    )
+
+    $normalized = Normalize-ManageHelpPage $Page
+    Write-ManageHelpHeader -Page $normalized -Interactive:$Interactive
 
     if ($normalized -eq "commands") {
         Write-Host "Commands" -ForegroundColor Yellow
@@ -1150,6 +1334,50 @@ function Show-ManageHelp {
     Write-Host "Open uninstall help with: cc-manage -help uninstall"
 }
 
+function Show-ManageHelp {
+    param(
+        [string]$Page = "general",
+        [switch]$Interactive
+    )
+
+    $normalized = Normalize-ManageHelpPage $Page
+    if (!$Interactive) {
+        Show-ManageHelpPage -Page $normalized
+        return
+    }
+
+    if (!(Test-InteractiveConsole)) {
+        Show-ManageHelpPage -Page $normalized
+        return
+    }
+
+    $pages = @(Get-ManageHelpPages)
+    $index = [array]::IndexOf($pages, $normalized)
+    if ($index -lt 0) { $index = 0 }
+    $helpTop = [Console]::CursorTop
+
+    while ($true) {
+        Clear-ConsoleBlock -StartRow $helpTop -LineCount 60
+        [Console]::SetCursorPosition(0, $helpTop)
+        Show-ManageHelpPage -Page $pages[$index] -Interactive
+        $key = [Console]::ReadKey($true)
+
+        switch ($key.Key) {
+            ([ConsoleKey]::LeftArrow) {
+                $index = ($index - 1 + $pages.Count) % $pages.Count
+                continue
+            }
+            ([ConsoleKey]::RightArrow) {
+                $index = ($index + 1) % $pages.Count
+                continue
+            }
+            ([ConsoleKey]::Q) { return }
+            ([ConsoleKey]::Escape) { return }
+            ([ConsoleKey]::Enter) { return }
+        }
+    }
+}
+
 function cc-manage {
     param(
         [switch]$Help,
@@ -1158,8 +1386,9 @@ function cc-manage {
     )
 
     if ($Help) {
-        $page = if ($ManageArgs -and $ManageArgs.Count -ge 1) { $ManageArgs[0] } else { "general" }
-        Show-ManageHelp -Page $page
+        $hasExplicitPage = ($ManageArgs -and $ManageArgs.Count -ge 1)
+        $page = if ($hasExplicitPage) { $ManageArgs[0] } else { "general" }
+        Show-ManageHelp -Page $page -Interactive:(!$hasExplicitPage)
         return
     }
 
@@ -1170,8 +1399,9 @@ function cc-manage {
 
     $cmd = $ManageArgs[0]
     if ($cmd -in @("help", "--help", "-help", "/?")) {
-        $page = if ($ManageArgs.Count -ge 2) { $ManageArgs[1] } else { "general" }
-        Show-ManageHelp -Page $page
+        $hasExplicitPage = ($ManageArgs.Count -ge 2)
+        $page = if ($hasExplicitPage) { $ManageArgs[1] } else { "general" }
+        Show-ManageHelp -Page $page -Interactive:(!$hasExplicitPage)
         return
     }
 

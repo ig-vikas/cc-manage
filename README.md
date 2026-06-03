@@ -132,7 +132,7 @@ cc-manage -help commands
 cc-manage -help uninstall
 ```
 
-The help view has three pages: General, Commands, and Uninstall.
+The default help view has three pages: General, Commands, and Uninstall. Use Left/Right arrows to move between pages. Menu selectors such as `cc-switch` and interactive `cc-manage` use Up/Down arrows and Enter.
 
 ## Cross Platform
 
