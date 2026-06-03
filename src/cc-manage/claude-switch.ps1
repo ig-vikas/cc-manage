@@ -1069,13 +1069,15 @@ function Write-ManageHelpTab {
 function Show-ManageHelp {
     param([string]$Page = "general")
     $normalized = $Page.ToLowerInvariant()
-    if ($normalized -notin @("general", "commands")) { $normalized = "general" }
+    if ($normalized -notin @("general", "commands", "uninstall")) { $normalized = "general" }
 
     Write-Host ""
     Write-Host " Help " -ForegroundColor Cyan -NoNewline
     Write-ManageHelpTab -Text "General" -Page $normalized -Target "general"
     Write-Host " " -NoNewline
     Write-ManageHelpTab -Text "Commands" -Page $normalized -Target "commands"
+    Write-Host " " -NoNewline
+    Write-ManageHelpTab -Text "Uninstall" -Page $normalized -Target "uninstall"
     Write-Host "`n"
 
     if ($normalized -eq "commands") {
@@ -1098,6 +1100,31 @@ function Show-ManageHelp {
         Write-Host "  cc-manage models groq --refresh"
         Write-Host "  cc-manage test api-test-gemini-working gemini-2.5-flash --level tools"
         Write-Host "  cc-manage -help general"
+        Write-Host "  cc-manage -help uninstall"
+        return
+    }
+
+    if ($normalized -eq "uninstall") {
+        Write-Host "Uninstall" -ForegroundColor Yellow
+        Write-Host "  Removing ~/.claude-profiles deletes local profiles, .env keys, key maps, and active profile state."
+        Write-Host "  Back up first if you might need those values."
+        Write-Host ""
+        Write-Host "Backup on Windows PowerShell" -ForegroundColor Yellow
+        Write-Host '  Rename-Item "$HOME\.claude-profiles" ".claude-profiles.backup"'
+        Write-Host ""
+        Write-Host "Remove on Windows PowerShell" -ForegroundColor Yellow
+        Write-Host '  $installDir = Join-Path $HOME ".claude-profiles"'
+        Write-Host '  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")'
+        Write-Host '  $newUserPath = (($userPath -split ";") | Where-Object { $_ -and $_ -ne $installDir }) -join ";"'
+        Write-Host '  [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")'
+        Write-Host '  if (Test-Path -LiteralPath $installDir) { Remove-Item -LiteralPath $installDir -Recurse -Force }'
+        Write-Host ""
+        Write-Host "Remove on macOS/Linux" -ForegroundColor Yellow
+        Write-Host '  rm -rf "$HOME/.claude-profiles"'
+        Write-Host ""
+        Write-Host "Then remove this installer block from ~/.zshrc, ~/.bashrc, or ~/.profile if present:" -ForegroundColor Yellow
+        Write-Host '  # cc-manage PATH'
+        Write-Host '  export PATH="$HOME/.claude-profiles:$PATH"'
         return
     }
 
@@ -1120,6 +1147,7 @@ function Show-ManageHelp {
     Write-Host "  On macOS/Linux, run these scripts with PowerShell Core (pwsh) and set CLAUDE_CODE_BIN if needed."
     Write-Host ""
     Write-Host "Open another page with: cc-manage -help commands"
+    Write-Host "Open uninstall help with: cc-manage -help uninstall"
 }
 
 function cc-manage {

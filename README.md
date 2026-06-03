@@ -56,6 +56,7 @@ API keys are entered through `cc-manage add` or `cc-manage key set <KEY_ID>` and
 ```powershell
 cc-manage -help
 cc-manage -help commands
+cc-manage -help uninstall
 cc-manage doctor
 cc-manage key list
 cc-manage models groq --refresh
@@ -90,14 +91,48 @@ The installed Claude Code profile manager and proxy scripts are stored at:
 ~/.claude-profiles
 ```
 
+## Uninstall
+
+Back up local profiles and keys before removing the install:
+
+```powershell
+Rename-Item "$HOME\.claude-profiles" ".claude-profiles.backup"
+```
+
+Remove cc-manage on Windows PowerShell:
+
+```powershell
+$installDir = Join-Path $HOME ".claude-profiles"
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+$newUserPath = (($userPath -split ";") | Where-Object { $_ -and $_ -ne $installDir }) -join ";"
+[Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+if (Test-Path -LiteralPath $installDir) {
+    Remove-Item -LiteralPath $installDir -Recurse -Force
+}
+```
+
+Remove cc-manage on macOS/Linux:
+
+```sh
+rm -rf "$HOME/.claude-profiles"
+```
+
+Then remove this block from `~/.zshrc`, `~/.bashrc`, or `~/.profile` if the installer added it:
+
+```sh
+# cc-manage PATH
+export PATH="$HOME/.claude-profiles:$PATH"
+```
+
 ## Help
 
 ```powershell
 cc-manage -help
 cc-manage -help commands
+cc-manage -help uninstall
 ```
 
-The help view has two pages: General and Commands.
+The help view has three pages: General, Commands, and Uninstall.
 
 ## Cross Platform
 
