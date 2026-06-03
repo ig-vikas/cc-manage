@@ -2,6 +2,59 @@ $script:PROFILES_DIR = Join-Path $PSScriptRoot "profiles"
 . "$PSScriptRoot\v2-core.ps1"
 . "$PSScriptRoot\providers.ps1"
 
+function Set-SafeCursorPosition {
+    param(
+        [int]$Left,
+        [int]$Top,
+        [switch]$ScrollIfBeyond
+    )
+    $bufferHeight = 100
+    try { $bufferHeight = [Console]::BufferHeight } catch {}
+    
+    if ($Top -ge $bufferHeight) {
+        $scrollAmount = $Top - $bufferHeight + 1
+        try {
+            [Console]::SetCursorPosition($Left, $bufferHeight - 1)
+        } catch {}
+        if ($ScrollIfBeyond) {
+            for ($i = 0; $i -lt $scrollAmount; $i++) {
+                Write-Host ""
+            }
+        }
+    } elseif ($Top -lt 0) {
+        try { [Console]::SetCursorPosition($Left, 0) } catch {}
+    } else {
+        try { [Console]::SetCursorPosition($Left, $Top) } catch {}
+    }
+}
+
+function Ensure-ConsoleSpace {
+    param(
+        [int]$LinesNeeded
+    )
+    $bufferHeight = 100
+    try { $bufferHeight = [Console]::BufferHeight } catch {}
+    
+    $currentTop = [Console]::CursorTop
+    $linesToBottom = ($bufferHeight - 1) - $currentTop
+    
+    if ($linesToBottom -lt $LinesNeeded) {
+        for ($i = 0; $i -lt $linesToBottom; $i++) {
+            Write-Host ""
+        }
+        $remainingScroll = $LinesNeeded - $linesToBottom
+        for ($i = 0; $i -lt $remainingScroll; $i++) {
+            Write-Host ""
+        }
+        
+        $startTop = [Console]::CursorTop - $LinesNeeded
+        if ($startTop -lt 0) { $startTop = 0 }
+        return $startTop
+    }
+    
+    return $currentTop
+}
+
 function Test-ClaudeWindows {
     try {
         return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
@@ -164,12 +217,14 @@ function Clear-ConsoleBlock {
 
     try {
         $width = [Math]::Max(1, [Console]::WindowWidth - 1)
-        $endRow = [Math]::Min([Console]::BufferHeight - 1, $StartRow + $LineCount)
-        for ($row = $StartRow; $row -lt $endRow; $row++) {
-            [Console]::SetCursorPosition(0, $row)
+        $bufferHeight = [Console]::BufferHeight
+        $safeStart = [Math]::Min($bufferHeight - 1, [Math]::Max(0, $StartRow))
+        $endRow = [Math]::Min($bufferHeight - 1, $safeStart + $LineCount)
+        for ($row = $safeStart; $row -lt $endRow; $row++) {
+            Set-SafeCursorPosition 0 $row
             [Console]::Write((" " * $width))
         }
-        [Console]::SetCursorPosition(0, $StartRow)
+        Set-SafeCursorPosition 0 $safeStart
     } catch {}
 }
 
@@ -202,14 +257,22 @@ function Read-MenuSelection {
     if (![string]::IsNullOrWhiteSpace($Prompt)) { Write-Host $Prompt -ForegroundColor DarkGray }
 
     $selected = $DefaultIndex
-    $menuTop = [Console]::CursorTop
+    $menuTop = Ensure-ConsoleSpace $itemsArray.Count
 
     while ($true) {
-        [Console]::SetCursorPosition(0, $menuTop)
+        Set-SafeCursorPosition 0 $menuTop
+        $beforeDraw = [Console]::CursorTop
         for ($i = 0; $i -lt $itemsArray.Count; $i++) {
             $prefix = if ($i -eq $selected) { ">" } else { " " }
             $label = Get-MenuItemLabel $itemsArray[$i]
             Write-MenuLine -Text ("{0} {1,2}. {2}" -f $prefix, ($i + 1), $label) -Selected:($i -eq $selected)
+        }
+        $afterDraw = [Console]::CursorTop
+        
+        $expectedAfter = $beforeDraw + $itemsArray.Count
+        if ($expectedAfter -gt $afterDraw) {
+            $scrolledAmount = $expectedAfter - $afterDraw
+            $menuTop = [Math]::Max(0, $menuTop - $scrolledAmount)
         }
 
         $key = [Console]::ReadKey($true)
@@ -223,11 +286,11 @@ function Read-MenuSelection {
                 continue
             }
             ([ConsoleKey]::Enter) {
-                [Console]::SetCursorPosition(0, $menuTop + $itemsArray.Count)
+                Set-SafeCursorPosition 0 ($menuTop + $itemsArray.Count) -ScrollIfBeyond
                 return (Get-MenuItemValue $itemsArray[$selected])
             }
             ([ConsoleKey]::Escape) {
-                [Console]::SetCursorPosition(0, $menuTop + $itemsArray.Count)
+                Set-SafeCursorPosition 0 ($menuTop + $itemsArray.Count) -ScrollIfBeyond
                 return $null
             }
         }
@@ -235,7 +298,7 @@ function Read-MenuSelection {
         if ($key.KeyChar -match '^[1-9]$') {
             $index = [int]([string]$key.KeyChar) - 1
             if ($index -ge 0 -and $index -lt $itemsArray.Count) {
-                [Console]::SetCursorPosition(0, $menuTop + $itemsArray.Count)
+                Set-SafeCursorPosition 0 ($menuTop + $itemsArray.Count) -ScrollIfBeyond
                 return (Get-MenuItemValue $itemsArray[$index])
             }
         }
@@ -1354,11 +1417,11 @@ function Show-ManageHelp {
     $pages = @(Get-ManageHelpPages)
     $index = [array]::IndexOf($pages, $normalized)
     if ($index -lt 0) { $index = 0 }
-    $helpTop = [Console]::CursorTop
+    $helpTop = Ensure-ConsoleSpace 30
 
     while ($true) {
         Clear-ConsoleBlock -StartRow $helpTop -LineCount 60
-        [Console]::SetCursorPosition(0, $helpTop)
+        Set-SafeCursorPosition 0 $helpTop
         Show-ManageHelpPage -Page $pages[$index] -Interactive
         $key = [Console]::ReadKey($true)
 
