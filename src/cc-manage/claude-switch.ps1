@@ -55,6 +55,69 @@ function Ensure-ConsoleSpace {
     return $currentTop
 }
 
+function Get-EnvKeysForProvider {
+    param(
+        [string]$ProviderKeyName
+    )
+    $envVars = Import-ClaudeDotEnv
+    $keys = @()
+    foreach ($keyName in $envVars.Keys) {
+        if ($keyName -eq $ProviderKeyName -or $keyName -like "${ProviderKeyName}_*") {
+            $keys += $keyName
+        }
+    }
+    return @($keys | Sort-Object)
+}
+
+function Get-ProfilesUsingKey {
+    param([string]$KeyName)
+    $profiles = @(Get-ProfileEntries)
+    $usedBy = @()
+    foreach ($profile in $profiles) {
+        $tpl = Load-ProfileTemplate $profile.Path
+        if ($tpl.ApiKeyId -eq $KeyName -or $tpl.ApiKeyName -eq $KeyName) {
+            $usedBy += $profile.Name
+        }
+    }
+    return $usedBy
+}
+
+function Get-ConfiguredApiKeys {
+    $envVars = Import-ClaudeDotEnv
+    $providers = Get-ProviderRegistry
+    
+    $results = @()
+    foreach ($keyName in @($envVars.Keys | Sort-Object)) {
+        $matchedProvider = $null
+        $matchedPrefix = ""
+        foreach ($p in $providers) {
+            $prefix = $p.KeyName
+            if ($keyName -eq $prefix -or $keyName -like "${prefix}_*") {
+                if ($prefix.Length -gt $matchedPrefix.Length) {
+                    $matchedPrefix = $prefix
+                    $matchedProvider = $p
+                }
+            }
+        }
+        
+        if ($matchedProvider) {
+            $suffix = ""
+            if ($keyName -like "${matchedPrefix}_*") {
+                $suffix = $keyName.Substring($matchedPrefix.Length + 1)
+            }
+            
+            $results += [pscustomobject]@{
+                KeyName = $keyName
+                ProviderId = $matchedProvider.Id
+                ProviderName = $matchedProvider.Name
+                Suffix = $suffix
+                Value = $envVars[$keyName]
+            }
+        }
+    }
+    return $results
+}
+
 function Test-ClaudeWindows {
     try {
         return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
@@ -662,7 +725,8 @@ function Start-ProfileManager {
             [pscustomobject]@{ Label = "Add New Profile"; Value = "2" }
             [pscustomobject]@{ Label = "Edit Existing Profile"; Value = "3" }
             [pscustomobject]@{ Label = "Delete Profile"; Value = "4" }
-            [pscustomobject]@{ Label = "Exit Management"; Value = "5" }
+            [pscustomobject]@{ Label = "Manage API Keys"; Value = "5" }
+            [pscustomobject]@{ Label = "Exit Management"; Value = "6" }
         )
         if (!$choice) { return }
         
@@ -674,9 +738,172 @@ function Start-ProfileManager {
             "2" { Add-ProfileInteractive }
             "3" { Edit-ProfileInteractive }
             "4" { Delete-ProfileInteractive }
+            "5" { Start-KeyManager }
+            "6" { return }
+        }
+    }
+}
+
+function Start-KeyManager {
+    while ($true) {
+        $choice = Read-MenuSelection -Title "--- Key Management ---" -Items @(
+            [pscustomobject]@{ Label = "List API Keys"; Value = "1" }
+            [pscustomobject]@{ Label = "Add API Key"; Value = "2" }
+            [pscustomobject]@{ Label = "Edit API Key"; Value = "3" }
+            [pscustomobject]@{ Label = "Delete API Key"; Value = "4" }
+            [pscustomobject]@{ Label = "Back to Main Menu"; Value = "5" }
+        )
+        if (!$choice) { return }
+        
+        switch ($choice) {
+            "1" {
+                Show-ApiKeysList
+                Read-Host "Press Enter to continue"
+            }
+            "2" { Add-ApiKeyInteractive }
+            "3" { Edit-ApiKeyInteractive }
+            "4" { Delete-ApiKeyInteractive }
             "5" { return }
         }
     }
+}
+
+function Show-ApiKeysList {
+    Write-Host "`n--- Configured API Keys ---" -ForegroundColor Yellow
+    $keys = @(Get-ConfiguredApiKeys)
+    if ($keys.Count -eq 0) {
+        Write-Host "No API keys configured yet." -ForegroundColor DarkGray
+        return
+    }
+    
+    foreach ($k in $keys) {
+        $usedBy = @(Get-ProfilesUsingKey $k.KeyName)
+        $usedText = if ($usedBy.Count -gt 0) { "Used by: $($usedBy -join ', ')" } else { "Not used by any profiles" }
+        Write-Host ("- {0} (Provider: {1}, Suffix: {2})" -f $k.KeyName, $k.ProviderName, (if ($k.Suffix) { $k.Suffix } else { "(default)" })) -ForegroundColor Green
+        Write-Host "  Value:   $(Protect-ClaudeSecret $k.Value)" -ForegroundColor Gray
+        Write-Host "  Usage:   $usedText" -ForegroundColor DarkGray
+        Write-Host ""
+    }
+}
+
+function Add-ApiKeyInteractive {
+    Write-Host "`n--- Add API Key ---" -ForegroundColor Cyan
+    $provider = Select-ProviderInteractive
+    if (!$provider) { return }
+    
+    $prefix = $provider.KeyName
+    Write-Host "Prefix for this provider: $prefix" -ForegroundColor DarkGray
+    
+    $suffix = Read-Host "Enter key suffix/name (e.g. vikas)"
+    if ([string]::IsNullOrWhiteSpace($suffix)) {
+        $confirmDefault = Read-Host "No suffix entered. Use the default key name '$prefix'? (y/N)"
+        if ($confirmDefault -notmatch "^y") { return }
+        $suffix = ""
+    }
+    
+    $suffixClean = ConvertTo-ClaudeEnvName $suffix
+    $fullKeyName = if ([string]::IsNullOrWhiteSpace($suffixClean)) { $prefix } else { "${prefix}_${suffixClean}" }
+    
+    $existing = Get-ClaudeEnvValue $fullKeyName
+    if (![string]::IsNullOrEmpty($existing)) {
+        Write-Host "Error: API key name '$fullKeyName' already exists in .env!" -ForegroundColor Red
+        $editInstead = Read-Host "Would you like to edit it instead? (y/N)"
+        if ($editInstead -match "^y") {
+            Edit-ApiKeyInteractive -PreselectedKeyName $fullKeyName
+        }
+        return
+    }
+    
+    $secure = Read-Host "Enter API key value for $fullKeyName" -AsSecureString
+    $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+    if ([string]::IsNullOrWhiteSpace($plain)) {
+        Write-Host "Cancelled (empty key value)." -ForegroundColor Yellow
+        return
+    }
+    
+    Set-ClaudeEnvValue -Name $fullKeyName -Value $plain
+    Write-Host "Saved $fullKeyName to .env as $(Protect-ClaudeSecret $plain)" -ForegroundColor Green
+    Read-Host "Press Enter to continue"
+}
+
+function Edit-ApiKeyInteractive {
+    param([string]$PreselectedKeyName = "")
+    
+    Write-Host "`n--- Edit API Key ---" -ForegroundColor Cyan
+    $keyName = $PreselectedKeyName
+    
+    if ([string]::IsNullOrWhiteSpace($keyName)) {
+        $keys = @(Get-ConfiguredApiKeys)
+        if ($keys.Count -eq 0) {
+            Write-Host "No API keys configured yet." -ForegroundColor Yellow
+            Read-Host "Press Enter to continue"
+            return
+        }
+        
+        $items = @($keys | ForEach-Object {
+            [pscustomobject]@{
+                Label = ("{0} ({1})" -f $_.KeyName, $_.ProviderName)
+                Value = $_.KeyName
+            }
+        })
+        
+        $keyName = Read-MenuSelection -Title "Select key to edit" -Items $items
+    }
+    
+    if ([string]::IsNullOrWhiteSpace($keyName)) { return }
+    
+    Write-Host "Editing: $keyName" -ForegroundColor Yellow
+    $usedBy = @(Get-ProfilesUsingKey $keyName)
+    if ($usedBy.Count -gt 0) {
+        Write-Host "Profiles using this key: $($usedBy -join ', ')" -ForegroundColor Yellow
+    } else {
+        Write-Host "This key is not used by any profiles." -ForegroundColor DarkGray
+    }
+    
+    $secure = Read-Host "Enter new API key value (leave blank to keep current)" -AsSecureString
+    $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+    if (![string]::IsNullOrWhiteSpace($plain)) {
+        Set-ClaudeEnvValue -Name $keyName -Value $plain
+        Write-Host "Updated $keyName in .env as $(Protect-ClaudeSecret $plain)" -ForegroundColor Green
+    } else {
+        Write-Host "Key value unchanged." -ForegroundColor Yellow
+    }
+    Read-Host "Press Enter to continue"
+}
+
+function Delete-ApiKeyInteractive {
+    Write-Host "`n--- Delete API Key ---" -ForegroundColor Cyan
+    $keys = @(Get-ConfiguredApiKeys)
+    if ($keys.Count -eq 0) {
+        Write-Host "No API keys configured yet." -ForegroundColor Yellow
+        Read-Host "Press Enter to continue"
+        return
+    }
+    
+    $items = @($keys | ForEach-Object {
+        [pscustomobject]@{
+            Label = ("{0} ({1})" -f $_.KeyName, $_.ProviderName)
+            Value = $_.KeyName
+        }
+    })
+    
+    $keyName = Read-MenuSelection -Title "Select key to delete" -Items $items
+    if ([string]::IsNullOrWhiteSpace($keyName)) { return }
+    
+    $usedBy = @(Get-ProfilesUsingKey $keyName)
+    if ($usedBy.Count -gt 0) {
+        Write-Host "WARNING: This key is currently used by profiles: $($usedBy -join ', ')" -ForegroundColor Red
+        Write-Host "Deleting it will break these profiles unless they are assigned a different key!" -ForegroundColor Red
+    }
+    
+    $confirm = Read-Host "Are you sure you want to delete '$keyName' from .env? (y/N)"
+    if ($confirm -match "^y") {
+        Remove-ClaudeEnvValue -Name $keyName
+        Write-Host "Removed $keyName from .env." -ForegroundColor Green
+    } else {
+        Write-Host "Deletion cancelled." -ForegroundColor Yellow
+    }
+    Read-Host "Press Enter to continue"
 }
 
 function Load-ProfileTemplate {
@@ -879,19 +1106,60 @@ function Add-ProfileInteractive {
     $profile.Mode = $provider.Mode
     $profile.AuthMode = $provider.AuthMode
 
-    $profile.ApiKeyId = New-ClaudeProfileKeyId -ProfileName $fileName -Provider $provider.Id
-    $profile.ApiKeyName = $profile.ApiKeyId
-    Set-ClaudeKeyMapping -Profile $fileName -Provider $provider.Id -KeyId $profile.ApiKeyId -SourceKeyName $provider.KeyName -Label $profile.Name
-    Write-Host "Generated profile API key id: $($profile.ApiKeyId)" -ForegroundColor DarkGray
-    $saveKey = Read-Host "Add/update value for $($profile.ApiKeyId) in .env now? (y/N)"
-    if ($saveKey -match "^y") {
-        $secure = Read-Host "API key value for $($profile.ApiKeyId)" -AsSecureString
+    $prefix = $provider.KeyName
+    $existingKeys = @(Get-EnvKeysForProvider -ProviderKeyName $prefix)
+    
+    $selectedKey = ""
+    if ($existingKeys.Count -gt 0) {
+        $keyOptions = @()
+        foreach ($k in $existingKeys) {
+            $keyOptions += [pscustomobject]@{
+                Label = "Use existing key: $k"
+                Value = $k
+            }
+        }
+        $keyOptions += [pscustomobject]@{
+            Label = "Add a new API key"
+            Value = "__ADD_NEW__"
+        }
+        
+        $keyChoice = Read-MenuSelection -Title "API Key Selection for $($provider.Name)" -Items $keyOptions
+        if ($keyChoice -eq "__ADD_NEW__") {
+            $suffix = Read-Host "Enter key suffix/name (e.g. vikas)"
+            $suffixClean = ConvertTo-ClaudeEnvName $suffix
+            $newKeyName = if ([string]::IsNullOrWhiteSpace($suffixClean)) { $prefix } else { "${prefix}_${suffixClean}" }
+            
+            $secure = Read-Host "API key value for $newKeyName" -AsSecureString
+            $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+            if (![string]::IsNullOrWhiteSpace($plain)) {
+                Set-ClaudeEnvValue -Name $newKeyName -Value $plain
+                Write-Host "Saved $newKeyName to .env as $(Protect-ClaudeSecret $plain)" -ForegroundColor Green
+            }
+            $selectedKey = $newKeyName
+        } elseif (![string]::IsNullOrWhiteSpace($keyChoice)) {
+            $selectedKey = $keyChoice
+        } else {
+            return
+        }
+    } else {
+        Write-Host "No existing keys found in .env for $($provider.Name)." -ForegroundColor Yellow
+        $suffix = Read-Host "Enter key suffix/name (e.g. vikas)"
+        $suffixClean = ConvertTo-ClaudeEnvName $suffix
+        $newKeyName = if ([string]::IsNullOrWhiteSpace($suffixClean)) { $prefix } else { "${prefix}_${suffixClean}" }
+        
+        $secure = Read-Host "API key value for $newKeyName" -AsSecureString
         $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
         if (![string]::IsNullOrWhiteSpace($plain)) {
-            Set-ClaudeEnvValue -Name $profile.ApiKeyId -Value $plain
-            Write-Host "Saved $($profile.ApiKeyId) to .env as $(Protect-ClaudeSecret $plain)" -ForegroundColor Green
+            Set-ClaudeEnvValue -Name $newKeyName -Value $plain
+            Write-Host "Saved $newKeyName to .env as $(Protect-ClaudeSecret $plain)" -ForegroundColor Green
         }
+        $selectedKey = $newKeyName
     }
+    
+    $profile.ApiKeyId = $selectedKey
+    $profile.ApiKeyName = $selectedKey
+    Set-ClaudeKeyMapping -Profile $fileName -Provider $provider.Id -KeyId $profile.ApiKeyId -SourceKeyName $provider.KeyName -Label $profile.Name
+    Write-Host "Profile API key id set to: $($profile.ApiKeyId)" -ForegroundColor Green
 
     if ($provider.Mode -eq "anthropic-direct") {
         $baseUrl = Read-Host "Base URL [$($provider.BaseUrl)]"
@@ -997,32 +1265,54 @@ function Edit-ProfileInteractive {
     $val = Read-Host "Auth Mode [$($profile.AuthMode)]"
     if (![string]::IsNullOrWhiteSpace($val)) { $profile.AuthMode = $val }
     
-    if ([string]::IsNullOrWhiteSpace($profile.ApiKeyId)) {
-        $profile.ApiKeyId = New-ClaudeProfileKeyId -ProfileName $entry.Name -Provider $profile.Provider
-        $profile.ApiKeyName = $profile.ApiKeyId
-        Set-ClaudeKeyMapping -Profile $entry.Name -Provider $profile.Provider -KeyId $profile.ApiKeyId -SourceKeyName (Get-DefaultKeyNameForProvider $profile.Provider) -Label $profile.Name
-    }
-    Write-Host "API Key ID: $($profile.ApiKeyId)" -ForegroundColor DarkGray
-    $regenKey = Read-Host "Generate a new unique API key id for this profile? (y/N)"
-    if ($regenKey -match "^y") {
-        $oldKeyId = $profile.ApiKeyId
-        $profile.ApiKeyId = New-ClaudeProfileKeyId -ProfileName $entry.Name -Provider $profile.Provider
-        $profile.ApiKeyName = $profile.ApiKeyId
-        $oldValue = Get-ClaudeEnvValue $oldKeyId
-        if (![string]::IsNullOrWhiteSpace($oldValue)) {
-            Set-ClaudeEnvValue -Name $profile.ApiKeyId -Value $oldValue
-        }
-        Set-ClaudeKeyMapping -Profile $entry.Name -Provider $profile.Provider -KeyId $profile.ApiKeyId -SourceKeyName $oldKeyId -Label $profile.Name
-        Write-Host "Generated new key id: $($profile.ApiKeyId)" -ForegroundColor Green
-    }
-
-    $changeKey = Read-Host "Add/update value for $($profile.ApiKeyId) in .env? (y/N)"
+    $providerDef = Get-ProviderDefinition -IdOrName $profile.Provider
+    $prefix = if ($providerDef) { $providerDef.KeyName } else { Get-DefaultKeyNameForProvider $profile.Provider }
+    
+    Write-Host "Current API Key ID: $($profile.ApiKeyId)" -ForegroundColor DarkGray
+    $changeKey = Read-Host "Change API key assigned to this profile? (y/N)"
     if ($changeKey -match "^y") {
-        $secure = Read-Host "API key value for $($profile.ApiKeyId)" -AsSecureString
-        $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
-        if (![string]::IsNullOrWhiteSpace($plain)) {
-            Set-ClaudeEnvValue -Name $profile.ApiKeyId -Value $plain
-            Write-Host "Saved $($profile.ApiKeyId) to .env as $(Protect-ClaudeSecret $plain)" -ForegroundColor Green
+        $existingKeys = @(Get-EnvKeysForProvider -ProviderKeyName $prefix)
+        $keyOptions = @()
+        foreach ($k in $existingKeys) {
+            $keyOptions += [pscustomobject]@{
+                Label = if ($k -eq $profile.ApiKeyId) { "Use existing key: $k (current)" } else { "Use existing key: $k" }
+                Value = $k
+            }
+        }
+        $keyOptions += [pscustomobject]@{
+            Label = "Add a new API key"
+            Value = "__ADD_NEW__"
+        }
+        
+        $keyChoice = Read-MenuSelection -Title "Select API Key for $($profile.Name)" -Items $keyOptions
+        if ($keyChoice -eq "__ADD_NEW__") {
+            $suffix = Read-Host "Enter key suffix/name (e.g. vikas)"
+            $suffixClean = ConvertTo-ClaudeEnvName $suffix
+            $newKeyName = if ([string]::IsNullOrWhiteSpace($suffixClean)) { $prefix } else { "${prefix}_${suffixClean}" }
+            
+            $secure = Read-Host "API key value for $newKeyName" -AsSecureString
+            $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+            if (![string]::IsNullOrWhiteSpace($plain)) {
+                Set-ClaudeEnvValue -Name $newKeyName -Value $plain
+                Write-Host "Saved $newKeyName to .env as $(Protect-ClaudeSecret $plain)" -ForegroundColor Green
+            }
+            $profile.ApiKeyId = $newKeyName
+            $profile.ApiKeyName = $newKeyName
+        } elseif (![string]::IsNullOrWhiteSpace($keyChoice)) {
+            $profile.ApiKeyId = $keyChoice
+            $profile.ApiKeyName = $keyChoice
+        }
+        Set-ClaudeKeyMapping -Profile $entry.Name -Provider $profile.Provider -KeyId $profile.ApiKeyId -SourceKeyName $prefix -Label $profile.Name
+        Write-Host "Assigned API key: $($profile.ApiKeyId)" -ForegroundColor Green
+    } else {
+        $updateVal = Read-Host "Update value for $($profile.ApiKeyId) in .env? (y/N)"
+        if ($updateVal -match "^y") {
+            $secure = Read-Host "New API key value for $($profile.ApiKeyId)" -AsSecureString
+            $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+            if (![string]::IsNullOrWhiteSpace($plain)) {
+                Set-ClaudeEnvValue -Name $profile.ApiKeyId -Value $plain
+                Write-Host "Saved $($profile.ApiKeyId) to .env as $(Protect-ClaudeSecret $plain)" -ForegroundColor Green
+            }
         }
     }
     
@@ -1157,19 +1447,7 @@ function Get-ProviderModels {
 }
 
 function Show-ClaudeKeys {
-    $values = Import-ClaudeDotEnv
-    if ($values.Count -eq 0) {
-        Write-Host "No keys found in $script:CLAUDE_ENV_PATH" -ForegroundColor Yellow
-        return
-    }
-    $map = @(Get-ClaudeKeyMap)
-    $values.GetEnumerator() | Sort-Object Name | ForEach-Object {
-        $envEntry = $_
-        $owner = $map | Where-Object { $_.KeyId -eq $envEntry.Name } | Select-Object -First 1
-        $ownerText = ""
-        if ($owner) { $ownerText = " [$($owner.Profile) / $($owner.Provider)]" }
-        Write-Host ("{0}={1}{2}" -f $envEntry.Name, (Protect-ClaudeSecret $envEntry.Value), $ownerText) -ForegroundColor Green
-    }
+    Show-ApiKeysList
 }
 
 function Invoke-ClaudeDoctor {
