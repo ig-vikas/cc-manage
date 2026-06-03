@@ -1,0 +1,59 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+**/.key-map.json
+.claude_active_profile
+**/.claude_active_profile
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Claude Code profile runtime files
+.claude-profiles/
+claude-profiles/
+profiles/
+**/.claude-profiles/
+**/.claude-profiles/profiles/*.ps1
+**/claude-profiles/profiles/*.ps1
+**/profiles/*.ps1
+*.secret.*
+secrets.*
+
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dist/
+build/
+coverage/
+
+# Local proxy/test output
+*.log
+proxy_debug.log
+proxy_log.txt
+tmp/
+temp/
+
+# Editors and OS files
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini

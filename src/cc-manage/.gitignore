@@ -1,0 +1,48 @@
+# Node.js
+node_modules/
+dist/
+build/
+.env
+.env.*
+!.env.example
+**/.key-map.json
+.claude_active_profile
+**/.claude_active_profile
+profiles/
+**/profiles/*.ps1
+proxy_debug.log
+proxy_log.txt
+*.log
+*.key
+*.pem
+*.p12
+*.pfx
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+env/
+
+# Java
+*.class
+*.jar
+*.war
+*.ear
+target/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*~

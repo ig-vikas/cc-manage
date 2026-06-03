@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  static-checks:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Compile Python scripts
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Filter "*.py"
+          if ($files.Count -gt 0) {
+            python -m py_compile @($files | ForEach-Object { $_.FullName })
+          }
+
+      - name: Verify required project docs
+        shell: pwsh
+        run: |
+          $required = @(
+            "README.md",
+            "IMPLEMENTATION_PLAN_V2.md",
+            ".env.example",
+            "SECURITY.md",
+            "CONTRIBUTING.md",
+            "CHANGELOG.md",
+            "LICENSE"
+          )
+          foreach ($file in $required) {
+            if (!(Test-Path $file)) {
+              throw "Missing required file: $file"
+            }
+          }
+
+      - name: Check for secret and profile leaks
+        shell: pwsh
+        run: |
+          $forbiddenPaths = @(
+            ".env",
+            ".key-map.json",
+            ".claude_active_profile",
+            "proxy_debug.log",
+            "proxy_log.txt"
+          )
+
+          foreach ($path in $forbiddenPaths) {
+            if (Test-Path -LiteralPath $path) {
+              throw "Forbidden private runtime file is present in the repository: $path"
+            }
+          }
+
+          $runtimeProfiles = @(
+            Get-ChildItem -Recurse -Force -File -Filter "*.ps1" |
+              Where-Object { $_.FullName -match '[\\/](\.claude-profiles|claude-profiles|profiles)[\\/]' }
+          )
+          if ($runtimeProfiles.Count -gt 0) {
+            $names = $runtimeProfiles | ForEach-Object { $_.FullName.Replace((Get-Location).Path, ".") }
+            throw "Runtime profile scripts must not be committed:`n$($names -join "`n")"
+          }
+
+          $patterns = [ordered]@{
+            "google_api_key" = "AIza[0-9A-Za-z_-]{20,}"
+            "groq_key" = "gsk_[0-9A-Za-z_-]+"
+            "huggingface_key" = "hf_[0-9A-Za-z_-]+"
+            "nvidia_key" = "nvapi-[0-9A-Za-z_-]+"
+            "openai_style_key" = "sk-[A-Za-z0-9_-]{20,}"
+            "generated_cckey_id" = "CCKEY_[A-Z0-9_]+_[0-9A-F]{8}"
+            "raw_secret_assignment" = "(?i)(API_KEY|AUTH_TOKEN|SECRET|PASSWORD)\s*=\s*[""'][^""']{12,}[""']"
+          }
+
+          $excludedDirs = @("[\\/]\.git[\\/]", "[\\/]__pycache__[\\/]")
+          $hits = @()
+          Get-ChildItem -Recurse -Force -File |
+            Where-Object {
+              $path = $_.FullName
+              -not ($excludedDirs | Where-Object { $path -match $_ })
+            } |
+            ForEach-Object {
+              $file = $_.FullName
+              $lineNo = 0
+              Get-Content -LiteralPath $file -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                  $lineNo++
+                  foreach ($name in $patterns.Keys) {
+                    if ($_ -match $patterns[$name]) {
+                      $hits += "{0}:{1} {2}" -f $file.Replace((Get-Location).Path, "."), $lineNo, $name
+                    }
+                  }
+                }
+            }
+
+          if ($hits.Count -gt 0) {
+            throw "Secret-like or profile-id-like values found. Matches are redacted by design:`n$($hits -join "`n")"
+          }
