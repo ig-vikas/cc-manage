@@ -114,9 +114,16 @@ function Test-Number {
     return $Value -match "^\d+$"
 }
 
+function Ensure-ProfilesDirectory {
+    if (!(Test-Path -LiteralPath $script:PROFILES_DIR)) {
+        New-Item -ItemType Directory -Force -Path $script:PROFILES_DIR | Out-Null
+    }
+}
+
 function Get-ProfileEntries {
+    Ensure-ProfilesDirectory
     $index = 0
-    Get-ChildItem $PROFILES_DIR -Filter "*.ps1" | Sort-Object BaseName | ForEach-Object {
+    Get-ChildItem -LiteralPath $PROFILES_DIR -Filter "*.ps1" | Sort-Object BaseName | ForEach-Object {
         $index++
         . $_.FullName
         [pscustomobject]@{
@@ -135,6 +142,13 @@ function Show-ProfileMenu {
     param($Entries)
     Write-Host "Usage: cc-switch [profile-number|profile-name] [model-number|model-name]" -ForegroundColor Cyan
     Write-Host ""
+
+    if (!$Entries -or @($Entries).Count -eq 0) {
+        Write-Host "No profiles are configured yet." -ForegroundColor Yellow
+        Write-Host "Run 'cc-manage add' to create your first profile." -ForegroundColor DarkGray
+        return
+    }
+
     Write-Host "Available profiles:" -ForegroundColor Yellow
     foreach ($entry in $Entries) {
         Write-Host ("  {0,2}. {1}" -f $entry.Index, $entry.Name) -ForegroundColor Green
@@ -150,6 +164,11 @@ function Resolve-ProfileEntry {
     )
 
     $entries = @(Get-ProfileEntries)
+    if ($entries.Count -eq 0) {
+        Show-ProfileMenu $entries
+        return $null
+    }
+
     if ($Prompt -or [string]::IsNullOrWhiteSpace($Selection)) {
         Show-ProfileMenu $entries
         $Selection = Read-Host "Select profile number"
@@ -626,6 +645,7 @@ function Set-ProfileProxyInteractive {
 
 function Add-ProfileInteractive {
     Write-Host "`n--- Add New Profile ---" -ForegroundColor Cyan
+    Ensure-ProfilesDirectory
     Show-ProviderMenu
     $providerSelection = Read-Host "Provider number or name"
     $provider = Resolve-ProviderSelection $providerSelection

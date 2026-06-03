@@ -41,6 +41,7 @@ fi
 
 mkdir -p "$INSTALL_DIR"
 cp -R "$SOURCE_DIR"/. "$INSTALL_DIR"/
+mkdir -p "$INSTALL_DIR/profiles"
 chmod +x "$INSTALL_DIR/cc" "$INSTALL_DIR/cc-switch" "$INSTALL_DIR/cc-status" "$INSTALL_DIR/cc-manage" "$INSTALL_DIR/claude" 2>/dev/null || true
 add_path_marker
 
