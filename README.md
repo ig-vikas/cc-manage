@@ -9,7 +9,19 @@ Repository: [ig-vikas/cc-manage](https://github.com/ig-vikas/cc-manage)
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/ig-vikas/cc-manage/main/install.ps1 | iex
+Invoke-RestMethod https://raw.githubusercontent.com/ig-vikas/cc-manage/main/install.ps1 | Invoke-Expression
+```
+
+Windows cmd.exe:
+
+```bat
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-RestMethod 'https://raw.githubusercontent.com/ig-vikas/cc-manage/main/install.ps1' | Invoke-Expression"
+```
+
+Windows Git Bash:
+
+```sh
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Invoke-RestMethod 'https://raw.githubusercontent.com/ig-vikas/cc-manage/main/install.ps1' | Invoke-Expression"
 ```
 
 macOS/Linux:

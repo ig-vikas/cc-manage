@@ -34,7 +34,7 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    Copy-Item -LiteralPath (Join-Path $sourceDir "*") -Destination $InstallDir -Recurse -Force
+    Get-ChildItem -LiteralPath $sourceDir -Force | Copy-Item -Destination $InstallDir -Recurse -Force
     Add-UserPath -PathToAdd $InstallDir
 
     Write-Host "Installed cc-manage to $InstallDir" -ForegroundColor Green
