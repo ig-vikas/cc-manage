@@ -63,12 +63,11 @@ cc
 ```text
 .
 |-- docs/                           # Plans, backlog, and long-form project notes
+|-- governance/                     # Changelog, contribution guide, and security policy
 |-- scripts/                        # One-off provider and model utilities
 |-- src/cc-manage/                  # Installed profile manager, launchers, and proxies
 |-- tests/                          # Local proxy contracts and provider smoke checks
 |-- .env.example                    # Expected local key names
-|-- SECURITY.md                     # Secret-handling and reporting policy
-|-- CONTRIBUTING.md                 # Development and test guidance
 `-- README.md                       # Install, usage, and project overview
 ```
 
@@ -135,6 +134,12 @@ Set `CLAUDE_CODE_BIN` if the `claude` executable is not discoverable from PATH o
 ## Safety
 
 Do not commit `.env`, API keys, key maps, debug logs, active-profile files, or runtime profile files. Local V2 profile files store generated key ids such as `CCKEY_<PROVIDER>_<PROFILE>_<RANDOM_ID>`; actual API key values stay in `.env`.
+
+## Governance
+
+- [Changelog](./governance/CHANGELOG.md)
+- [Contributing](./governance/CONTRIBUTING.md)
+- [Security](./governance/SECURITY.md)
 
 ## Production Backlog
 

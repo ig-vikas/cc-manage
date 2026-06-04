@@ -41,9 +41,9 @@ jobs:
             "docs/IMPLEMENTATION_PLAN_V2.md",
             "docs/PRODUCTION_GRADE_BACKLOG.md",
             ".env.example",
-            "SECURITY.md",
-            "CONTRIBUTING.md",
-            "CHANGELOG.md",
+            "governance/SECURITY.md",
+            "governance/CONTRIBUTING.md",
+            "governance/CHANGELOG.md",
             "LICENSE"
           )
           foreach ($file in $required) {
