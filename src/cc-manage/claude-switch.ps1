@@ -1164,7 +1164,7 @@ function Add-ProfileInteractive {
     if ($provider.Mode -eq "anthropic-direct") {
         $baseUrl = Read-Host "Base URL [$($provider.BaseUrl)]"
         $profile.BaseUrl = if ([string]::IsNullOrWhiteSpace($baseUrl)) { $provider.BaseUrl } else { $baseUrl }
-    } elseif ($provider.Mode -eq "gemini-proxy" -or $provider.Mode -eq "huggingface-proxy" -or $provider.Mode -eq "nvidia-proxy" -or $provider.Mode -eq "mistral-proxy") {
+    } elseif ($provider.Mode -eq "gemini-proxy" -or $provider.Mode -eq "huggingface-proxy" -or $provider.Mode -eq "nvidia-proxy" -or $provider.Mode -eq "mistral-proxy" -or $provider.Mode -eq "codestral-proxy" -or $provider.Mode -eq "mistral-vibe-proxy") {
         $profile.BaseUrl = $provider.BaseUrl
         $profile.ProxyScript = $provider.ProxyScript
         $profile.ProxyPort = "$($provider.ProxyPort)"
@@ -1406,6 +1406,7 @@ function Get-ProviderModels {
             $providerAliases = @($ProviderId)
             if ($ProviderId -eq "nvidia-nim") { $providerAliases += "nvidia" }
             if ($ProviderId -eq "nvidia") { $providerAliases += "nvidia-nim" }
+            if ($ProviderId -eq "mistral-vibe") { $providerAliases += "mistral" }
 
             foreach ($mapped in @(Get-ClaudeKeyMap | Where-Object { $providerAliases -contains $_.Provider })) {
                 $candidateValue = Get-ClaudeEnvValue $mapped.KeyId
@@ -1413,6 +1414,14 @@ function Get-ProviderModels {
                     $resolvedKeyName = $mapped.KeyId
                     $apiKey = $candidateValue
                     break
+                }
+            }
+
+            if ([string]::IsNullOrWhiteSpace($apiKey) -and $ProviderId -eq "mistral-vibe") {
+                $candidateValue = Get-ClaudeEnvValue "MISTRAL_API_KEY"
+                if (![string]::IsNullOrWhiteSpace($candidateValue)) {
+                    $resolvedKeyName = "MISTRAL_API_KEY"
+                    $apiKey = $candidateValue
                 }
             }
         }
@@ -1664,11 +1673,15 @@ function Show-ManageHelpPage {
     Write-Host "  openai-chat-proxy    Converts Anthropic Messages to OpenAI Chat Completions."
     Write-Host "  nvidia-proxy         NVIDIA NIM wrapper over the shared OpenAI-compatible proxy."
     Write-Host "  mistral-proxy        Mistral wrapper over the shared OpenAI-compatible proxy."
+    Write-Host "  codestral-proxy      Codestral wrapper over the shared OpenAI-compatible proxy."
+    Write-Host "  mistral-vibe-proxy   Mistral Vibe wrapper over the shared OpenAI-compatible proxy."
     Write-Host ""
     Write-Host "Notes" -ForegroundColor Yellow
     Write-Host "  Groq output tokens are clamped to 4096 by default and oversized requests are rejected locally."
     Write-Host "  NVIDIA NIM uses https://integrate.api.nvidia.com/v1 through the local proxy."
     Write-Host "  Mistral uses https://api.mistral.ai/v1 through the local proxy."
+    Write-Host "  Mistral Vibe uses https://api.mistral.ai/v1 through the local proxy with Mistral Vibe key/model defaults."
+    Write-Host "  Codestral chat uses https://codestral.mistral.ai/v1 through the local proxy; FIM is https://codestral.mistral.ai/v1/fim/completions."
     Write-Host "  On macOS/Linux, run these scripts with PowerShell Core (pwsh) and set CLAUDE_CODE_BIN if needed."
     Write-Host ""
     Write-Host "Open another page with: cc-manage -help commands"

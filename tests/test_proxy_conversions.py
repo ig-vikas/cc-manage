@@ -280,8 +280,10 @@ def start_mock_openai() -> tuple[MockOpenAIServer, threading.Thread, int]:
 def test_proxy_basic_endpoints() -> None:
     cases = [
         ("anthropic-gemini-proxy.js", {}),
+        ("codestral-anthropic-proxy.js", {}),
         ("hug-anthropic-proxy.js", {}),
         ("mistral-anthropic-proxy.js", {}),
+        ("mistral-vibe-anthropic-proxy.js", {}),
         ("nvidia-anthropic-proxy.js", {}),
         ("openrouter-anthropic-normalizer.js", {}),
         (
@@ -533,8 +535,10 @@ def test_groq_provider_limits() -> None:
 
 def test_proxy_source_contracts() -> None:
     wrappers = {
+        "codestral-anthropic-proxy.js": "https://codestral.mistral.ai/v1",
         "hug-anthropic-proxy.js": "https://router.huggingface.co/v1",
         "mistral-anthropic-proxy.js": "https://api.mistral.ai/v1",
+        "mistral-vibe-anthropic-proxy.js": "https://api.mistral.ai/v1",
         "nvidia-anthropic-proxy.js": "https://integrate.api.nvidia.com/v1",
         "openrouter-anthropic-normalizer.js": "https://openrouter.ai/api/v1",
     }
@@ -587,6 +591,14 @@ def test_proxy_source_contracts() -> None:
         'Mode = "mistral-proxy"',
         'ModelsEndpoint = "https://api.mistral.ai/v1/models"',
         'ProxyScript = \'Join-Path $PSScriptRoot "..\\proxy\\mistral-anthropic-proxy.js"\'',
+        'Id = "mistral-vibe"',
+        'Mode = "mistral-vibe-proxy"',
+        'KeyName = "MISTRAL_VIBE_API_KEY"',
+        'ProxyScript = \'Join-Path $PSScriptRoot "..\\proxy\\mistral-vibe-anthropic-proxy.js"\'',
+        'Id = "codestral"',
+        'Mode = "codestral-proxy"',
+        'KeyName = "CODESTRAL_API_KEY"',
+        'ProxyScript = \'Join-Path $PSScriptRoot "..\\proxy\\codestral-anthropic-proxy.js"\'',
     ):
         require(marker in providers, f"Provider registry missing marker: {marker}")
 

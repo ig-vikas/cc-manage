@@ -8,14 +8,14 @@ from typing import Iterable
 from dotenv import load_dotenv
 
 
-ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parents[1]
 CLAUDE_PROFILES_DIR = Path(
     os.environ.get("CLAUDE_PROFILES_DIR", Path.home() / ".claude-profiles" / "profiles")
 )
 
 
 def load_local_env() -> None:
-    load_dotenv(ROOT / ".env", override=False)
+    load_dotenv(REPO_ROOT / ".env", override=False)
 
 
 def read_profile_value(profile_name: str, variable: str) -> str | None:

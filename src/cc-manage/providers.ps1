@@ -62,6 +62,30 @@ $script:PROVIDER_REGISTRY = @(
         DefaultModels = @("mistral-large-latest", "pixtral-large-latest", "ministral-8b-latest")
     },
     @{
+        Id = "mistral-vibe"
+        Name = "Mistral Vibe"
+        Mode = "mistral-vibe-proxy"
+        BaseUrl = "http://127.0.0.1:18007"
+        AuthMode = "api_key"
+        KeyName = "MISTRAL_VIBE_API_KEY"
+        ModelSource = "dynamic"
+        ModelsEndpoint = "https://api.mistral.ai/v1/models"
+        ProxyScript = 'Join-Path $PSScriptRoot "..\proxy\mistral-vibe-anthropic-proxy.js"'
+        ProxyPort = 18007
+        DefaultModels = @("mistral-vibe-cli-latest", "mistral-medium-3.5", "devstral-small-latest")
+    },
+    @{
+        Id = "codestral"
+        Name = "Codestral"
+        Mode = "codestral-proxy"
+        BaseUrl = "http://127.0.0.1:18006"
+        AuthMode = "api_key"
+        KeyName = "CODESTRAL_API_KEY"
+        ProxyScript = 'Join-Path $PSScriptRoot "..\proxy\codestral-anthropic-proxy.js"'
+        ProxyPort = 18006
+        DefaultModels = @("codestral-latest", "codestral-2508")
+    },
+    @{
         Id = "deepseek"
         Name = "DeepSeek"
         Mode = "anthropic-direct"

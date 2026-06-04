@@ -25,7 +25,10 @@ jobs:
       - name: Compile Python scripts
         shell: pwsh
         run: |
-          $files = Get-ChildItem -Filter "*.py"
+          $files = Get-ChildItem -Recurse -Filter "*.py" |
+            Where-Object {
+              $_.FullName -notmatch '[\\/](\.venv|venv|env|__pycache__)[\\/]'
+            }
           if ($files.Count -gt 0) {
             python -m py_compile @($files | ForEach-Object { $_.FullName })
           }
@@ -35,7 +38,8 @@ jobs:
         run: |
           $required = @(
             "README.md",
-            "IMPLEMENTATION_PLAN_V2.md",
+            "docs/IMPLEMENTATION_PLAN_V2.md",
+            "docs/PRODUCTION_GRADE_BACKLOG.md",
             ".env.example",
             "SECURITY.md",
             "CONTRIBUTING.md",

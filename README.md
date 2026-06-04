@@ -1,6 +1,6 @@
 # cc-manage
 
-Claude Code profile switching, provider setup, and local compatibility proxies for Gemini, Groq, Mistral, NVIDIA NIM, Hugging Face, OpenRouter, and OpenAI-compatible APIs.
+Claude Code profile switching, provider setup, and local compatibility proxies for Gemini, Groq, Mistral, Mistral Vibe, Codestral, NVIDIA NIM, Hugging Face, OpenRouter, and OpenAI-compatible APIs.
 
 Repository: [ig-vikas/cc-manage](https://github.com/ig-vikas/cc-manage)
 
@@ -37,7 +37,7 @@ API keys are entered through `cc-manage add` or `cc-manage key set <KEY_ID>` and
 - Converts Anthropic Messages to Gemini, OpenAI-compatible Chat Completions, and provider-specific proxy formats.
 - Handles text, images, tool calls, tool results, streaming, token counting, and provider errors.
 - Adds provider-aware guardrails for Groq and NVIDIA NIM.
-- Provides dedicated wrappers for Gemini, Hugging Face, Mistral, NVIDIA NIM, OpenRouter normalization, and generic OpenAI-compatible chat APIs.
+- Provides dedicated wrappers for Gemini, Hugging Face, Mistral, Mistral Vibe, Codestral, NVIDIA NIM, OpenRouter normalization, and generic OpenAI-compatible chat APIs.
 
 ## Useful Commands
 
@@ -49,7 +49,10 @@ cc-manage doctor
 cc-manage key list
 cc-manage models groq --refresh
 cc-manage models mistral --refresh
+cc-manage models mistral-vibe --refresh
 cc-manage models nvidia-nim --refresh
+cc-manage add  # select Mistral Vibe to use https://api.mistral.ai/v1/chat/completions through the local proxy
+cc-manage add  # select Codestral to use https://codestral.mistral.ai/v1/chat/completions through the local proxy
 cc-switch
 cc-switch 6 1
 cc
@@ -59,18 +62,14 @@ cc
 
 ```text
 .
-|-- api_test_common.py              # Shared Python helpers for provider tests
-|-- find_working_model.py           # Model probing helper
-|-- test_anthropic_requests.py      # Anthropic-compatible request checks
-|-- test_gemini_models.py           # Gemini model checks
-|-- test_gemini_proxy.py            # Gemini proxy checks
-|-- test_openrouter_anthropic.py    # OpenRouter/Anthropic compatibility checks
-|-- test_proxy_conversions.py       # Local proxy conversion contract checks
-|-- test_requests.py                # Generic request checks
+|-- docs/                           # Plans, backlog, and long-form project notes
+|-- scripts/                        # One-off provider and model utilities
+|-- src/cc-manage/                  # Installed profile manager, launchers, and proxies
+|-- tests/                          # Local proxy contracts and provider smoke checks
 |-- .env.example                    # Expected local key names
 |-- SECURITY.md                     # Secret-handling and reporting policy
 |-- CONTRIBUTING.md                 # Development and test guidance
-`-- IMPLEMENTATION_PLAN_V2.md       # Planned v2 profile/provider architecture
+`-- README.md                       # Install, usage, and project overview
 ```
 
 The installed Claude Code profile manager and proxy scripts are stored at:
@@ -139,4 +138,4 @@ Do not commit `.env`, API keys, key maps, debug logs, active-profile files, or r
 
 ## Production Backlog
 
-See [PRODUCTION_GRADE_BACKLOG.md](./PRODUCTION_GRADE_BACKLOG.md).
+See [PRODUCTION_GRADE_BACKLOG.md](./docs/PRODUCTION_GRADE_BACKLOG.md).
