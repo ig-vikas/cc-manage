@@ -78,7 +78,7 @@ jobs:
         shell: pwsh
         run: |
           $env:CLAUDE_PROFILES_ROOT = Join-Path (Get-Location) "src/cc-manage"
-          python tests\test_proxy_conversions.py
+          python tests/test_proxy_conversions.py
 
       - name: Verify required project docs
         shell: pwsh
