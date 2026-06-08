@@ -6,7 +6,11 @@ on:
 
 jobs:
   static-checks:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Check out repository
@@ -22,6 +26,43 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path src -Recurse -Filter "*.ps1"
+          foreach ($file in $files) {
+            [scriptblock]::Create((Get-Content -LiteralPath $file.FullName -Raw)) | Out-Null
+          }
+
+      - name: Check Node proxy syntax
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path src/cc-manage/proxy -Filter "*.js"
+          foreach ($file in $files) {
+            node --check $file.FullName
+          }
+
+      - name: Check Unix launcher syntax
+        if: runner.os != 'Windows'
+        shell: sh
+        run: |
+          sh -n install.sh
+          sh -n src/cc-manage/cc
+          sh -n src/cc-manage/cc-switch
+          sh -n src/cc-manage/cc-status
+          sh -n src/cc-manage/cc-manage
+          sh -n src/cc-manage/claude
+
+      - name: Verify Unix launcher executable bits
+        if: runner.os != 'Windows'
+        shell: sh
+        run: |
+          test -x src/cc-manage/cc
+          test -x src/cc-manage/cc-switch
+          test -x src/cc-manage/cc-status
+          test -x src/cc-manage/cc-manage
+          test -x src/cc-manage/claude
+
       - name: Compile Python scripts
         shell: pwsh
         run: |
@@ -32,6 +73,12 @@ jobs:
           if ($files.Count -gt 0) {
             python -m py_compile @($files | ForEach-Object { $_.FullName })
           }
+
+      - name: Run proxy conversion tests
+        shell: pwsh
+        run: |
+          $env:CLAUDE_PROFILES_ROOT = Join-Path (Get-Location) "src/cc-manage"
+          python tests\test_proxy_conversions.py
 
       - name: Verify required project docs
         shell: pwsh

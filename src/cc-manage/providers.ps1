@@ -86,6 +86,17 @@ $script:PROVIDER_REGISTRY = @(
         DefaultModels = @("codestral-latest", "codestral-2508")
     },
     @{
+        Id = "opencode_nemotron"
+        Name = "OpenCode Nemotron"
+        Mode = "opencode-nemotron-proxy"
+        BaseUrl = "http://127.0.0.1:18100"
+        AuthMode = "auth_token"
+        KeyName = "OPENCODE_API_KEY"
+        ProxyScript = 'Join-Path $PSScriptRoot "..\proxy\opencode-nemotron-proxy.js"'
+        ProxyPort = 18100
+        DefaultModels = @("nemotron-3-ultra-free")
+    },
+    @{
         Id = "deepseek"
         Name = "DeepSeek"
         Mode = "anthropic-direct"

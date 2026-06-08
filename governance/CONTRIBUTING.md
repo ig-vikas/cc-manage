@@ -7,10 +7,11 @@ Thanks for helping improve the Claude Code Provider Profile Lab.
 Run these before opening a change:
 
 ```powershell
-[scriptblock]::Create((Get-Content "$env:USERPROFILE\.claude-profiles\claude-switch.ps1" -Raw)) | Out-Null
-node --check "$env:USERPROFILE\.claude-profiles\proxy\openai-chat-proxy.js"
-node --check "$env:USERPROFILE\.claude-profiles\proxy\anthropic-gemini-proxy.js"
-$env:CLAUDE_PROFILES_ROOT="$env:USERPROFILE\.claude-profiles"; python tests\test_proxy_conversions.py
+[scriptblock]::Create((Get-Content "src\cc-manage\claude-switch.ps1" -Raw)) | Out-Null
+node --check "src\cc-manage\proxy\openai-chat-proxy.js"
+node --check "src\cc-manage\proxy\anthropic-gemini-proxy.js"
+node --check "src\cc-manage\proxy\opencode-nemotron-proxy.js"
+$env:CLAUDE_PROFILES_ROOT="$PWD\src\cc-manage"; python tests\test_proxy_conversions.py
 ```
 
 Run provider health checks when keys are available:

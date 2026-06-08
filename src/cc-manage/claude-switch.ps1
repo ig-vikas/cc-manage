@@ -638,12 +638,13 @@ function cc {
         $env:ANTHROPIC_DEFAULT_OPUS_MODEL = $modelAliases.Opus
         $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = $modelAliases.Haiku
 
+        Remove-Item Env:\ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
+        Remove-Item Env:\ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue
+
         if ($script:AUTH_MODE -eq "auth_token") {
             $env:ANTHROPIC_AUTH_TOKEN = $resolvedApiKey
-            Remove-Item Env:\ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
         } else {
             $env:ANTHROPIC_API_KEY = $resolvedApiKey
-            Remove-Item Env:\ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue
         }
 
         Write-Host "Launching Claude with profile: $($script:PROFILE_NAME) -> $model" -ForegroundColor Cyan
@@ -1164,7 +1165,7 @@ function Add-ProfileInteractive {
     if ($provider.Mode -eq "anthropic-direct") {
         $baseUrl = Read-Host "Base URL [$($provider.BaseUrl)]"
         $profile.BaseUrl = if ([string]::IsNullOrWhiteSpace($baseUrl)) { $provider.BaseUrl } else { $baseUrl }
-    } elseif ($provider.Mode -eq "gemini-proxy" -or $provider.Mode -eq "huggingface-proxy" -or $provider.Mode -eq "nvidia-proxy" -or $provider.Mode -eq "mistral-proxy" -or $provider.Mode -eq "codestral-proxy" -or $provider.Mode -eq "mistral-vibe-proxy") {
+    } elseif ($provider.Mode -eq "gemini-proxy" -or $provider.Mode -eq "huggingface-proxy" -or $provider.Mode -eq "nvidia-proxy" -or $provider.Mode -eq "mistral-proxy" -or $provider.Mode -eq "codestral-proxy" -or $provider.Mode -eq "mistral-vibe-proxy" -or $provider.Mode -eq "opencode-nemotron-proxy") {
         $profile.BaseUrl = $provider.BaseUrl
         $profile.ProxyScript = $provider.ProxyScript
         $profile.ProxyPort = "$($provider.ProxyPort)"
@@ -1675,6 +1676,7 @@ function Show-ManageHelpPage {
     Write-Host "  mistral-proxy        Mistral wrapper over the shared OpenAI-compatible proxy."
     Write-Host "  codestral-proxy      Codestral wrapper over the shared OpenAI-compatible proxy."
     Write-Host "  mistral-vibe-proxy   Mistral Vibe wrapper over the shared OpenAI-compatible proxy."
+    Write-Host "  opencode-nemotron-proxy  Preserves tools while cleaning Claude-only metadata for OpenCode Nemotron."
     Write-Host ""
     Write-Host "Notes" -ForegroundColor Yellow
     Write-Host "  Groq output tokens are clamped to 4096 by default and oversized requests are rejected locally."
@@ -1682,6 +1684,7 @@ function Show-ManageHelpPage {
     Write-Host "  Mistral uses https://api.mistral.ai/v1 through the local proxy."
     Write-Host "  Mistral Vibe uses https://api.mistral.ai/v1 through the local proxy with Mistral Vibe key/model defaults."
     Write-Host "  Codestral chat uses https://codestral.mistral.ai/v1 through the local proxy; FIM is https://codestral.mistral.ai/v1/fim/completions."
+    Write-Host "  OpenCode Nemotron uses https://opencode.ai/zen/v1/chat/completions through the local proxy, preserves tool calls, and disables unsupported Claude-only metadata upstream."
     Write-Host "  On macOS/Linux, run these scripts with PowerShell Core (pwsh) and set CLAUDE_CODE_BIN if needed."
     Write-Host ""
     Write-Host "Open another page with: cc-manage -help commands"

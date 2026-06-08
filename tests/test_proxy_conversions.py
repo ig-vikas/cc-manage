@@ -277,6 +277,72 @@ def start_mock_openai() -> tuple[MockOpenAIServer, threading.Thread, int]:
     return server, thread, port
 
 
+class MockOpenCodeHandler(BaseHTTPRequestHandler):
+    server: "MockOpenCodeServer"
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        raw_body = self.rfile.read(length).decode("utf-8")
+        payload = json.loads(raw_body or "{}")
+        self.server.captured.append(
+            {
+                "path": self.path,
+                "headers": dict(self.headers),
+                "body": payload,
+            }
+        )
+
+        response_body = {
+            "id": "chatcmpl_opencode_test",
+            "object": "chat.completion",
+            "model": "nemotron-3-ultra-free",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "OpenCode says hello."},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 200, "completion_tokens": 53},
+        }
+        tools = payload.get("tools") or []
+        if tools:
+            function_name = tools[0]["function"]["name"]
+            response_body["choices"][0]["message"]["tool_calls"] = [
+                {
+                    "id": "call_opencode_test",
+                    "type": "function",
+                    "function": {
+                        "name": function_name,
+                        "arguments": "{\"path\":\"README.md\"}",
+                    },
+                }
+            ]
+            response_body["choices"][0]["finish_reason"] = "tool_calls"
+        encoded = json.dumps(response_body).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def log_message(self, fmt: str, *args: object) -> None:
+        return
+
+
+class MockOpenCodeServer(HTTPServer):
+    captured: list[dict]
+
+
+def start_mock_opencode() -> tuple[MockOpenCodeServer, threading.Thread, int]:
+    port = free_port()
+    server = MockOpenCodeServer((HOST, port), MockOpenCodeHandler)
+    server.captured = []
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread, port
+
+
 def test_proxy_basic_endpoints() -> None:
     cases = [
         ("anthropic-gemini-proxy.js", {}),
@@ -285,6 +351,7 @@ def test_proxy_basic_endpoints() -> None:
         ("mistral-anthropic-proxy.js", {}),
         ("mistral-vibe-anthropic-proxy.js", {}),
         ("nvidia-anthropic-proxy.js", {}),
+        ("opencode-nemotron-proxy.js", {}),
         ("openrouter-anthropic-normalizer.js", {}),
         (
             "openai-chat-proxy.js",
@@ -533,6 +600,139 @@ def test_groq_provider_limits() -> None:
         server.server_close()
 
 
+def test_opencode_nemotron_cleaning_and_streaming() -> None:
+    server, _thread, upstream_port = start_mock_opencode()
+    proxy_port = free_port()
+    process = start_proxy(
+        "opencode-nemotron-proxy.js",
+        proxy_port,
+        {
+            "CC_OPENCODE_CHAT_URL": f"http://{HOST}:{upstream_port}/zen/v1/chat/completions",
+            "CC_MODELS": "nemotron-3-ultra-free",
+        },
+    )
+
+    unsafe_body = {
+        "model": "nemotron-3-ultra-free",
+        "max_tokens": 32000,
+        "system": [{"type": "text", "text": "Claude Code system prompt."}],
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Hello OpenCode."}],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "I need the file."},
+                    {"type": "tool_use", "id": "toolu_1", "name": "read-file.path", "input": {"path": "README.md"}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "tool output"},
+                ],
+            },
+        ],
+        "tools": [
+            {
+                "name": "read-file.path",
+                "description": "Read a project file.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            }
+        ],
+        "tool_choice": {"type": "tool", "name": "read-file.path"},
+        "thinking": {"type": "adaptive"},
+        "context_management": {},
+        "output_config": {"effort": "high"},
+        "metadata": {"user_id": "tester"},
+        "container": {"id": "container"},
+        "mcp_servers": {"fs": {}},
+        "service_tier": "auto",
+        "betas": ["claude-code-only"],
+    }
+
+    try:
+        base_url = f"http://{HOST}:{proxy_port}"
+        status, response_body = http_request("POST", f"{base_url}/v1/messages?beta=true", unsafe_body)
+        require(status == 200, f"OpenCode non-stream conversion returned {status}: {response_body[:500]}")
+        parsed = json.loads(response_body)
+        require(parsed["id"].startswith("msg_proxy_"), "OpenCode response id was not proxied")
+        require(parsed["model"] == "nemotron-3-ultra-free", "OpenCode response model should use requested alias")
+        require(parsed["content"][0] == {"type": "text", "text": "OpenCode says hello."}, "OpenCode text response was not normalized")
+        tool_block = next((block for block in parsed["content"] if block.get("type") == "tool_use"), None)
+        require(tool_block is not None, "OpenCode tool_call was not converted to Anthropic tool_use")
+        require(tool_block["name"] == "read-file.path", "OpenCode sanitized tool name was not mapped back")
+        require(tool_block["input"] == {"path": "README.md"}, "OpenCode tool arguments were not parsed")
+        require(parsed["stop_reason"] == "tool_use", "OpenCode tool finish reason was not mapped")
+        require(parsed["usage"]["input_tokens"] == 200, "OpenCode input usage was not preserved")
+        require(parsed["usage"]["output_tokens"] == 53, "OpenCode output usage was not preserved")
+        require(parsed["usage"]["cache_creation_input_tokens"] == 0, "OpenCode cache creation usage missing")
+        require(parsed["usage"]["cache_read_input_tokens"] == 0, "OpenCode cache read usage missing")
+
+        captured = server.captured[-1]
+        upstream_body = captured["body"]
+        require(captured["path"] == "/zen/v1/chat/completions", "OpenCode proxy used the wrong upstream path")
+        require(captured["headers"].get("Authorization") == "Bearer test-key", "OpenCode auth header was not forwarded")
+        require(upstream_body["stream"] is False, "OpenCode upstream stream must be forced false")
+        require(upstream_body["model"] == "nemotron-3-ultra-free", "OpenCode model was not forwarded")
+        require(upstream_body["max_tokens"] == 32000, "OpenCode max_tokens was not forwarded")
+        require(
+            upstream_body["messages"] == [
+                {"role": "system", "content": "Claude Code system prompt."},
+                {"role": "user", "content": "Hello OpenCode."},
+                {
+                    "role": "assistant",
+                    "content": "I need the file.",
+                    "tool_calls": [
+                        {
+                            "id": "toolu_1",
+                            "type": "function",
+                            "function": {"name": "read-file_path", "arguments": "{\"path\":\"README.md\"}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "toolu_1", "content": "tool output"},
+            ],
+            "OpenCode messages were not converted to OpenAI-compatible tool-aware content",
+        )
+        require(upstream_body["tools"][0]["function"]["name"] == "read-file_path", "OpenCode tool name was not sanitized")
+        require(upstream_body["tools"][0]["function"]["parameters"]["required"] == ["path"], "OpenCode tool schema was not preserved")
+        require(upstream_body["tool_choice"]["function"]["name"] == "read-file_path", "OpenCode tool_choice was not converted")
+        for stripped in (
+            "thinking",
+            "context_management",
+            "output_config",
+            "metadata",
+            "container",
+            "mcp_servers",
+            "service_tier",
+            "betas",
+        ):
+            require(stripped not in upstream_body, f"OpenCode upstream body leaked stripped field: {stripped}")
+
+        stream_body = dict(unsafe_body)
+        stream_body["stream"] = True
+        status, stream_text = http_request("POST", f"{base_url}/v1/messages", stream_body, timeout=15)
+        require(status == 200, f"OpenCode stream conversion returned {status}: {stream_text[:500]}")
+        require("event: message_start" in stream_text, "OpenCode fake SSE missing message_start")
+        require("event: content_block_delta" in stream_text, "OpenCode fake SSE missing content delta")
+        require("OpenCode says hello." in stream_text, "OpenCode fake SSE missing final text")
+        require("\"type\":\"tool_use\"" in stream_text, "OpenCode fake SSE missing tool_use block")
+        require("\"name\":\"read-file.path\"" in stream_text, "OpenCode fake SSE did not map tool name back")
+        require("event: message_stop" in stream_text, "OpenCode fake SSE missing message_stop")
+        require(server.captured[-1]["body"]["stream"] is False, "OpenCode streaming request should still be non-stream upstream")
+    finally:
+        stop_process(process)
+        server.shutdown()
+        server.server_close()
+
+
 def test_proxy_source_contracts() -> None:
     wrappers = {
         "codestral-anthropic-proxy.js": "https://codestral.mistral.ai/v1",
@@ -580,6 +780,18 @@ def test_proxy_source_contracts() -> None:
     ):
         require(marker in shared, f"Shared OpenAI proxy missing conversion marker: {marker}")
 
+    opencode = (PROXY_DIR / "opencode-nemotron-proxy.js").read_text(encoding="utf-8")
+    for marker in (
+        "https://opencode.ai/zen/v1/chat/completions",
+        "function cleanOpenCodeRequest",
+        "stream: false",
+        "toOpenAiTools",
+        "contentBlocksFromOpenAiMessage",
+        "function writeFakeAnthropicStream",
+        "content_block_delta",
+    ):
+        require(marker in opencode, f"OpenCode Nemotron proxy missing conversion marker: {marker}")
+
     profiles_root = PROXY_DIR.parent
     providers = (profiles_root / "providers.ps1").read_text(encoding="utf-8")
     for marker in (
@@ -599,6 +811,11 @@ def test_proxy_source_contracts() -> None:
         'Mode = "codestral-proxy"',
         'KeyName = "CODESTRAL_API_KEY"',
         'ProxyScript = \'Join-Path $PSScriptRoot "..\\proxy\\codestral-anthropic-proxy.js"\'',
+        'Id = "opencode_nemotron"',
+        'Mode = "opencode-nemotron-proxy"',
+        'AuthMode = "auth_token"',
+        'KeyName = "OPENCODE_API_KEY"',
+        'ProxyScript = \'Join-Path $PSScriptRoot "..\\proxy\\opencode-nemotron-proxy.js"\'',
     ):
         require(marker in providers, f"Provider registry missing marker: {marker}")
 
@@ -610,6 +827,7 @@ def main() -> int:
         ("OpenAI response arrays/object args", test_openai_response_content_array_and_object_args),
         ("Hugging Face Kimi options", test_huggingface_kimi_options),
         ("Groq provider limits", test_groq_provider_limits),
+        ("OpenCode Nemotron cleaning/streaming", test_opencode_nemotron_cleaning_and_streaming),
         ("source contracts", test_proxy_source_contracts),
     ]
 
