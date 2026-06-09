@@ -43,6 +43,12 @@ cc
 
 API keys are entered through `cc-manage add` or `cc-manage key set <KEY_ID>` and saved locally in `~/.claude-profiles/.env`.
 
+`cc-manage` also repairs Claude Code's persistent `~/.claude/settings.json` when you run `cc-manage doctor` or launch through `cc`. It removes cc-manage-managed Anthropic auth/base/model overrides from that file so Claude Code does not see both `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY`. Other settings, such as unrelated `env` entries, are preserved. You can run the repair directly with:
+
+```powershell
+cc-manage settings repair
+```
+
 ## How It Works
 
 `cc-manage` keeps provider configuration, profile metadata, proxy startup, and key lookup in one predictable workflow:

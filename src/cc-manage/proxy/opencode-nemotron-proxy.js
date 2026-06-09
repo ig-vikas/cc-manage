@@ -2,7 +2,7 @@ const http = require('http');
 const https = require('https');
 
 const PORT = parseInt(process.argv[2], 10) || 18100;
-const PROVIDER = 'opencode_nemotron';
+const PROVIDER = process.env.CC_PROVIDER || 'opencode_nemotron';
 const DEFAULT_MODEL = 'nemotron-3-ultra-free';
 const AVAILABLE_MODELS = (process.env.CC_MODELS || DEFAULT_MODEL)
   .split(',')
@@ -12,6 +12,8 @@ const UPSTREAM_CHAT_URL =
   process.env.CC_OPENCODE_CHAT_URL ||
   process.env.OPENCODE_CHAT_URL ||
   'https://opencode.ai/zen/v1/chat/completions';
+const TOOL_REASONING_STATE = new Map();
+const MAX_TOOL_REASONING_STATE = 500;
 
 function getApiKey(req) {
   const h = req.headers['x-api-key'] || req.headers.authorization || '';
@@ -46,6 +48,39 @@ function compactJson(value) {
   } catch (e) {
     return String(value || '');
   }
+}
+
+function rememberToolReasoning(id, reasoning) {
+  const text = String(reasoning || '').trim();
+  if (!id || !text) return;
+  TOOL_REASONING_STATE.set(String(id), text);
+  while (TOOL_REASONING_STATE.size > MAX_TOOL_REASONING_STATE) {
+    const oldestKey = TOOL_REASONING_STATE.keys().next().value;
+    TOOL_REASONING_STATE.delete(oldestKey);
+  }
+}
+
+function getRememberedToolReasoning(id) {
+  if (!id) return '';
+  return TOOL_REASONING_STATE.get(String(id)) || '';
+}
+
+function getMessageReasoningContent(message) {
+  const value = message?.reasoning_content ?? message?.reasoning ?? message?.thinking;
+  if (!value) return '';
+  if (typeof value === 'string') return value.trim();
+  if (Array.isArray(value)) {
+    return value.map(item => {
+      if (!item) return '';
+      if (typeof item === 'string') return item;
+      return item.text || item.reasoning_content || item.thinking || compactJson(item);
+    }).filter(Boolean).join('\n').trim();
+  }
+  return compactJson(value).trim();
+}
+
+function uniqueNonEmpty(values) {
+  return [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))];
 }
 
 function fallbackPartText(part) {
@@ -148,10 +183,17 @@ function toOpenAiMessages(reqBody, toolMaps) {
     if (role === 'assistant' && Array.isArray(msg.content)) {
       const textParts = [];
       const toolCalls = [];
+      const reasoningParts = [];
       for (const part of msg.content) {
         if (part.type === 'text') {
           textParts.push(part.text || '');
+        } else if (part.type === 'thinking') {
+          if (part.thinking) reasoningParts.push(part.thinking);
+        } else if (part.type === 'redacted_thinking') {
+          if (part.data) reasoningParts.push(part.data);
         } else if (part.type === 'tool_use') {
+          const rememberedReasoning = getRememberedToolReasoning(part.id);
+          if (rememberedReasoning) reasoningParts.push(rememberedReasoning);
           toolCalls.push({
             id: part.id || makeId('call_'),
             type: 'function',
@@ -167,6 +209,8 @@ function toOpenAiMessages(reqBody, toolMaps) {
       }
       const assistantMessage = { role: 'assistant', content: textParts.join('\n') || null };
       if (toolCalls.length) assistantMessage.tool_calls = toolCalls;
+      const reasoning = uniqueNonEmpty(reasoningParts).join('\n');
+      if (reasoning) assistantMessage.reasoning_content = reasoning;
       out.push(assistantMessage);
       continue;
     }
@@ -319,17 +363,20 @@ function contentBlocksFromOpenAiMessage(message, anthropicReq) {
   const toolMaps = buildToolNameMaps(anthropicReq.tools || []);
   const blocks = [];
   const text = openAiContentToText(message.content);
+  const reasoning = getMessageReasoningContent(message);
   if (text) blocks.push({ type: 'text', text });
 
   for (const toolCall of message.tool_calls || []) {
     const fn = toolCall.function || {};
     const args = typeof fn.arguments === 'string' ? fn.arguments : compactJson(fn.arguments || {});
-    blocks.push({
+    const block = {
       type: 'tool_use',
       id: String(toolCall.id || '').startsWith('toolu_') ? toolCall.id : makeId('toolu_'),
       name: fromOpenAiToolName(fn.name, toolMaps),
       input: safeParseJson(args)
-    });
+    };
+    if (reasoning) rememberToolReasoning(block.id, reasoning);
+    blocks.push(block);
   }
 
   if (!blocks.length) blocks.push({ type: 'text', text: '' });

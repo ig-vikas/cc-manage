@@ -153,6 +153,131 @@ function Get-ClaudeExecutablePath {
     return $null
 }
 
+function Get-ClaudeSettingsPath {
+    $homeDir = Get-ClaudeHomeDir
+    return (Join-Path (Join-Path $homeDir ".claude") "settings.json")
+}
+
+function Backup-ClaudeSettingsFile {
+    param([string]$Path)
+
+    if (!(Test-Path -LiteralPath $Path)) { return "" }
+    $backup = "$Path.bak-$(Get-Date -Format yyyyMMddHHmmss)"
+    Copy-Item -LiteralPath $Path -Destination $backup -Force
+    return $backup
+}
+
+function Remove-ClaudeJsonProperty {
+    param(
+        [object]$Object,
+        [string]$Name
+    )
+
+    if ($null -eq $Object) { return $false }
+    $prop = $Object.PSObject.Properties[$Name]
+    if (!$prop) { return $false }
+    [void]$Object.PSObject.Properties.Remove($Name)
+    return $true
+}
+
+function Write-ClaudeSettingsJson {
+    param(
+        [string]$Path,
+        [object]$Settings
+    )
+
+    $parent = Split-Path -Parent $Path
+    if (![string]::IsNullOrWhiteSpace($parent)) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
+    $json = $Settings | ConvertTo-Json -Depth 50
+    Set-Content -LiteralPath $Path -Value $json -Encoding UTF8
+}
+
+function Repair-ClaudeSettings {
+    param(
+        [string]$SettingsPath = "",
+        [switch]$Quiet
+    )
+
+    if ([string]::IsNullOrWhiteSpace($SettingsPath)) {
+        $SettingsPath = Get-ClaudeSettingsPath
+    }
+    if (!(Test-Path -LiteralPath $SettingsPath)) {
+        if (!$Quiet) { Write-Host "Claude settings.json: not found; nothing to repair." -ForegroundColor DarkGray }
+        return $false
+    }
+
+    $settings = $null
+    try {
+        $raw = Get-Content -LiteralPath $SettingsPath -Raw
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            $settings = [pscustomobject]@{}
+        } else {
+            $settings = $raw | ConvertFrom-Json
+        }
+    } catch {
+        $backup = Backup-ClaudeSettingsFile -Path $SettingsPath
+        Write-ClaudeSettingsJson -Path $SettingsPath -Settings ([pscustomobject]@{})
+        if (!$Quiet) {
+            Write-Host "Claude settings.json was invalid JSON and was reset to {}." -ForegroundColor Yellow
+            if ($backup) { Write-Host "Backup: $backup" -ForegroundColor DarkGray }
+        }
+        return $true
+    }
+
+    if ($null -eq $settings) { $settings = [pscustomobject]@{} }
+    $changed = $false
+    $managedEnvKeys = @(
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL"
+    )
+
+    $envProp = $settings.PSObject.Properties["env"]
+    if ($envProp) {
+        $envSettings = $envProp.Value
+        $isObject = ($envSettings -is [pscustomobject]) -or ($envSettings -is [hashtable])
+        if ($isObject) {
+            foreach ($key in $managedEnvKeys) {
+                if (Remove-ClaudeJsonProperty -Object $envSettings -Name $key) {
+                    $changed = $true
+                }
+            }
+            if (@($envSettings.PSObject.Properties).Count -eq 0) {
+                if (Remove-ClaudeJsonProperty -Object $settings -Name "env") {
+                    $changed = $true
+                }
+            }
+        } else {
+            if (Remove-ClaudeJsonProperty -Object $settings -Name "env") {
+                $changed = $true
+            }
+        }
+    }
+
+    if (Remove-ClaudeJsonProperty -Object $settings -Name "model") {
+        $changed = $true
+    }
+
+    if (!$changed) {
+        if (!$Quiet) { Write-Host "Claude settings.json: no cc-manage auth/model conflicts found." -ForegroundColor Green }
+        return $false
+    }
+
+    $backupPath = Backup-ClaudeSettingsFile -Path $SettingsPath
+    Write-ClaudeSettingsJson -Path $SettingsPath -Settings $settings
+    if (!$Quiet) {
+        Write-Host "Claude settings.json repaired: removed managed Anthropic auth/base/model overrides." -ForegroundColor Green
+        if ($backupPath) { Write-Host "Backup: $backupPath" -ForegroundColor DarkGray }
+    }
+    return $true
+}
+
 function Get-NodeExecutablePath {
     if (![string]::IsNullOrWhiteSpace($env:NODE_EXE) -and (Test-Path -LiteralPath $env:NODE_EXE)) {
         return $env:NODE_EXE
@@ -599,6 +724,8 @@ function cc {
             $global:LASTEXITCODE = 1
             return
         }
+
+        Repair-ClaudeSettings -Quiet | Out-Null
 
         $env:CC_PROVIDER = $script:PROVIDER
         $env:CC_PROVIDER_MODE = $script:MODE
@@ -1467,6 +1594,7 @@ function Invoke-ClaudeDoctor {
     Write-Host ("Node: {0}" -f $(if ($node) { $node.Source } else { "missing" }))
     Write-Host ("Claude Code: {0}" -f $(if ($claude -and (Test-Path -LiteralPath $claude)) { $claude } else { "missing" }))
     Write-Host ("Env file: {0}" -f $(if (Test-Path $script:CLAUDE_ENV_PATH) { $script:CLAUDE_ENV_PATH } else { "missing" }))
+    Repair-ClaudeSettings | Out-Null
 
     $issues = 0
     foreach ($entry in Get-ProfileEntries) {
@@ -1626,6 +1754,7 @@ function Show-ManageHelpPage {
         Write-Host "  cc-manage key list                Show generated profile key ids with redacted values"
         Write-Host "  cc-manage key set <KEY_ID>        Add/update a key value in .env"
         Write-Host "  cc-manage models <provider>       Fetch dynamic provider models when supported"
+        Write-Host "  cc-manage settings repair         Remove Claude settings auth/model conflicts"
         Write-Host "  cc-manage doctor                  Check keys, proxies, Node, and Claude Code"
         Write-Host "  cc-manage test <profile> [model] --level basic|tools"
         Write-Host ""
@@ -1802,6 +1931,13 @@ function cc-manage {
             if ($ManageArgs.Count -lt 2) { Write-Host "Usage: cc-manage models <provider> [--refresh]" -ForegroundColor Yellow; return }
             Get-ProviderModels -ProviderId $ManageArgs[1] -Refresh:($ManageArgs -contains "--refresh") | Out-Null
         }
+        "settings" {
+            $sub = if ($ManageArgs.Count -ge 2) { $ManageArgs[1] } else { "repair" }
+            switch ($sub) {
+                "repair" { Repair-ClaudeSettings | Out-Null }
+                default { Write-Host "Usage: cc-manage settings repair" -ForegroundColor Yellow }
+            }
+        }
         "doctor" { Invoke-ClaudeDoctor }
         "migrate" { Migrate-ClaudeProfilesToV2 }
         "test" {
@@ -1814,7 +1950,7 @@ function cc-manage {
             Test-ClaudeProfile -ProfileName $ManageArgs[1] -Model $model -Level $level
         }
         default {
-            Write-Host "Usage: cc-manage add|edit|key|models|migrate|doctor|test" -ForegroundColor Yellow
+            Write-Host "Usage: cc-manage add|edit|key|models|settings|migrate|doctor|test" -ForegroundColor Yellow
         }
     }
 }
