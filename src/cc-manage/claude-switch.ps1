@@ -142,14 +142,24 @@ function Get-ClaudeExecutablePath {
     $homeDir = Get-ClaudeHomeDir
     $candidates = @(
         (Join-Path $homeDir ".local/bin/claude.exe"),
-        (Join-Path $homeDir ".local/bin/claude")
+        (Join-Path $homeDir ".local/bin/claude"),
+        (Join-Path $env:APPDATA "npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe"),
+        (Join-Path $env:APPDATA "npm/claude.ps1"),
+        (Join-Path $env:APPDATA "npm/claude.cmd")
     )
     foreach ($candidate in $candidates) {
         if (Test-Path -LiteralPath $candidate) { return $candidate }
     }
 
-    $command = Get-Command claude -ErrorAction SilentlyContinue
-    if ($command) { return $command.Source }
+    $commands = @(Get-Command claude -All -ErrorAction SilentlyContinue)
+    foreach ($command in $commands) {
+        $source = if ($command.Source) { $command.Source } elseif ($command.Path) { $command.Path } else { "" }
+        if ([string]::IsNullOrWhiteSpace($source)) { continue }
+        $resolved = Resolve-Path -LiteralPath $source -ErrorAction SilentlyContinue
+        $sourcePath = if ($resolved) { $resolved.Path } else { $source }
+        if ($sourcePath -like "$PSScriptRoot*") { continue }
+        return $sourcePath
+    }
     return $null
 }
 
@@ -312,6 +322,65 @@ function Get-LocalPortOwnerBestEffort {
     return $null
 }
 
+function Get-LocalPortOwnerProcessBestEffort {
+    param([int]$Port)
+
+    $ownerProcessId = Get-LocalPortOwnerBestEffort -Port $Port
+    if (!$ownerProcessId) { return $null }
+
+    if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
+        $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $ownerProcessId" -ErrorAction SilentlyContinue
+        if ($processInfo) { return $processInfo }
+    }
+
+    return Get-Process -Id $ownerProcessId -ErrorAction SilentlyContinue
+}
+
+function Test-ClaudeProxyProcessMatch {
+    param(
+        [object]$ProcessInfo,
+        [string]$ProxyScript,
+        [int]$ProxyPort
+    )
+
+    if (!$ProcessInfo) { return $false }
+
+    $commandLine = ""
+    if ($ProcessInfo.PSObject.Properties["CommandLine"]) {
+        $commandLine = [string]$ProcessInfo.CommandLine
+    } elseif ($ProcessInfo.PSObject.Properties["Path"]) {
+        $commandLine = [string]$ProcessInfo.Path
+    } elseif ($ProcessInfo.PSObject.Properties["ProcessName"]) {
+        $commandLine = [string]$ProcessInfo.ProcessName
+    }
+
+    if ([string]::IsNullOrWhiteSpace($commandLine)) { return $false }
+
+    $proxyLeaf = Split-Path -Leaf $ProxyScript
+    $normalizedScript = (Resolve-Path -LiteralPath $ProxyScript -ErrorAction SilentlyContinue).Path
+    if ([string]::IsNullOrWhiteSpace($normalizedScript)) { $normalizedScript = $ProxyScript }
+
+    $mentionsProxy = ($commandLine -like "*$normalizedScript*") -or ($commandLine -like "*$proxyLeaf*")
+    $mentionsPort = $commandLine -match "(^|\s)$ProxyPort($|\s)"
+    return ($mentionsProxy -and $mentionsPort)
+}
+
+function Stop-ClaudeProxyProcess {
+    param([object]$ProcessInfo)
+
+    if (!$ProcessInfo) { return }
+    $ownerProcessId = $ProcessInfo.ProcessId
+    if (!$ownerProcessId -and $ProcessInfo.Id) { $ownerProcessId = $ProcessInfo.Id }
+    if (!$ownerProcessId) { return }
+
+    Stop-Process -Id $ownerProcessId -Force -ErrorAction SilentlyContinue
+    for ($i = 0; $i -lt 20; $i++) {
+        $running = Get-Process -Id $ownerProcessId -ErrorAction SilentlyContinue
+        if (!$running) { return }
+        Start-Sleep -Milliseconds 100
+    }
+}
+
 function Start-ClaudeProxyProcess {
     param([string]$ProxyScript, [int]$ProxyPort)
     $params = @{
@@ -321,6 +390,63 @@ function Start-ClaudeProxyProcess {
     }
     if (Test-ClaudeWindows) { $params.WindowStyle = "Hidden" }
     return Start-Process @params
+}
+
+function Start-ClaudeProfileProxy {
+    param(
+        [string]$ProxyScript,
+        [int]$ProxyPort
+    )
+
+    if (Test-LocalPortListening -Port $ProxyPort) {
+        $owner = Get-LocalPortOwnerProcessBestEffort -Port $ProxyPort
+        if (Test-ClaudeProxyProcessMatch -ProcessInfo $owner -ProxyScript $ProxyScript -ProxyPort $ProxyPort) {
+            $ownerProcessId = if ($owner.ProcessId) { $owner.ProcessId } else { $owner.Id }
+            Write-Host "  Restarting existing cc-manage proxy on :$ProxyPort (PID $ownerProcessId)" -ForegroundColor DarkGray
+            Stop-ClaudeProxyProcess -ProcessInfo $owner
+        } else {
+            $ownerText = if ($owner) {
+                $ownerProcessId = if ($owner.ProcessId) { $owner.ProcessId } else { $owner.Id }
+                "PID $ownerProcessId"
+            } else {
+                "an unknown process"
+            }
+            throw "Port $ProxyPort is already in use by $ownerText. Stop that process or choose another profile port."
+        }
+    }
+
+    Write-Host "  Starting proxy: $(Split-Path $ProxyScript -Leaf) on :$ProxyPort" -ForegroundColor DarkGray
+    $proxyProcess = Start-ClaudeProxyProcess -ProxyScript $ProxyScript -ProxyPort $ProxyPort
+    for ($i = 0; $i -lt 25; $i++) {
+        if ($proxyProcess.HasExited) {
+            throw "Proxy exited before it was ready on port $ProxyPort."
+        }
+        if (Test-LocalPortListening -Port $ProxyPort) {
+            return $proxyProcess
+        }
+        Start-Sleep -Milliseconds 200
+    }
+
+    if ($proxyProcess -and !$proxyProcess.HasExited) {
+        Stop-ClaudeProxyProcess -ProcessInfo $proxyProcess
+    }
+    throw "Proxy did not start listening on port $ProxyPort."
+}
+
+function Clear-ClaudeLaunchEnvironment {
+    Remove-Item Env:\ANTHROPIC_BASE_URL -ErrorAction SilentlyContinue
+    Remove-Item Env:\ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:\ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue
+    Remove-Item Env:\ANTHROPIC_MODEL -ErrorAction SilentlyContinue
+    Remove-Item Env:\ANTHROPIC_DEFAULT_SONNET_MODEL -ErrorAction SilentlyContinue
+    Remove-Item Env:\ANTHROPIC_DEFAULT_OPUS_MODEL -ErrorAction SilentlyContinue
+    Remove-Item Env:\ANTHROPIC_DEFAULT_HAIKU_MODEL -ErrorAction SilentlyContinue
+    Remove-Item Env:\CC_PROVIDER -ErrorAction SilentlyContinue
+    Remove-Item Env:\CC_PROVIDER_MODE -ErrorAction SilentlyContinue
+    Remove-Item Env:\CC_PROFILE_BASE_URL -ErrorAction SilentlyContinue
+    Remove-Item Env:\CC_UPSTREAM_BASE_URL -ErrorAction SilentlyContinue
+    Remove-Item Env:\CC_DEFAULT_MODEL -ErrorAction SilentlyContinue
+    Remove-Item Env:\CC_MODELS -ErrorAction SilentlyContinue
 }
 
 function Get-ActiveProfile {
@@ -727,83 +853,73 @@ function cc {
 
         Repair-ClaudeSettings -Quiet | Out-Null
 
-        $env:CC_PROVIDER = $script:PROVIDER
-        $env:CC_PROVIDER_MODE = $script:MODE
-        $env:CC_PROFILE_BASE_URL = $script:BASE_URL
-        $env:CC_UPSTREAM_BASE_URL = if ($script:UPSTREAM_BASE_URL) { $script:UPSTREAM_BASE_URL } else { $script:BASE_URL }
-        $env:CC_DEFAULT_MODEL = $script:DEFAULT_MODEL
-        $env:CC_MODELS = (@($script:MODELS) -join ",")
-
         $proxyProcess = $null
-        $proxyScript = $null
-        if ($script:PROXY_SCRIPT) {
-            $resolvedProxyScript = Resolve-Path -LiteralPath $script:PROXY_SCRIPT -ErrorAction SilentlyContinue
-            if ($resolvedProxyScript) {
-                $proxyScript = $resolvedProxyScript.Path
+        $claudeExitCode = $null
+        try {
+            Clear-ClaudeLaunchEnvironment
+
+            $env:CC_PROVIDER = $script:PROVIDER
+            $env:CC_PROVIDER_MODE = $script:MODE
+            $env:CC_PROFILE_BASE_URL = $script:BASE_URL
+            $env:CC_UPSTREAM_BASE_URL = if ($script:UPSTREAM_BASE_URL) { $script:UPSTREAM_BASE_URL } else { $script:BASE_URL }
+            $env:CC_DEFAULT_MODEL = $model
+            $env:CC_MODELS = (@($script:MODELS) -join ",")
+
+            $proxyScript = $null
+            if ($script:PROXY_SCRIPT) {
+                $resolvedProxyScript = Resolve-Path -LiteralPath $script:PROXY_SCRIPT -ErrorAction SilentlyContinue
+                if ($resolvedProxyScript) {
+                    $proxyScript = $resolvedProxyScript.Path
+                }
             }
-        }
-        if ($proxyScript) {
-            $proxyPort = if ($script:PROXY_PORT) { $script:PROXY_PORT } else { 18000 }
-            $portInUse = Test-LocalPortListening -Port $proxyPort
-            if (-not $portInUse) {
-                Write-Host "  Starting proxy: $(Split-Path $proxyScript -Leaf) on :$proxyPort" -ForegroundColor DarkGray
-                $proxyProcess = Start-ClaudeProxyProcess -ProxyScript $proxyScript -ProxyPort $proxyPort
-                Start-Sleep -Milliseconds 1500
+            if ($proxyScript) {
+                $proxyPort = if ($script:PROXY_PORT) { $script:PROXY_PORT } else { 18000 }
+                $proxyProcess = Start-ClaudeProfileProxy -ProxyScript $proxyScript -ProxyPort $proxyPort
+            } elseif ($script:PROXY_SCRIPT) {
+                Write-Host "  Proxy script not found: $($script:PROXY_SCRIPT)" -ForegroundColor Yellow
+            }
+
+            $env:ANTHROPIC_BASE_URL = $script:BASE_URL
+            $env:ANTHROPIC_MODEL = $model
+            $modelAliases = Get-ClaudeModelAliases $model
+            $env:ANTHROPIC_DEFAULT_SONNET_MODEL = $modelAliases.Sonnet
+            $env:ANTHROPIC_DEFAULT_OPUS_MODEL = $modelAliases.Opus
+            $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = $modelAliases.Haiku
+
+            Remove-Item Env:\ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
+            Remove-Item Env:\ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue
+
+            if ($script:AUTH_MODE -eq "auth_token") {
+                $env:ANTHROPIC_AUTH_TOKEN = $resolvedApiKey
             } else {
-                Write-Host "  Using existing proxy on :$proxyPort" -ForegroundColor DarkGray
-                $ownerPid = Get-LocalPortOwnerBestEffort -Port $proxyPort
-                if ($ownerPid) { Write-Host "  Proxy PID: $ownerPid" -ForegroundColor DarkGray }
+                $env:ANTHROPIC_API_KEY = $resolvedApiKey
             }
-        } elseif ($script:PROXY_SCRIPT) {
-            Write-Host "  Proxy script not found: $($script:PROXY_SCRIPT)" -ForegroundColor Yellow
-        }
 
-        $env:ANTHROPIC_BASE_URL = $script:BASE_URL
-        $env:ANTHROPIC_MODEL = $model
-        $modelAliases = Get-ClaudeModelAliases $model
-        $env:ANTHROPIC_DEFAULT_SONNET_MODEL = $modelAliases.Sonnet
-        $env:ANTHROPIC_DEFAULT_OPUS_MODEL = $modelAliases.Opus
-        $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = $modelAliases.Haiku
+            Write-Host "Launching Claude with profile: $($script:PROFILE_NAME) -> $model" -ForegroundColor Cyan
+            Write-Host "  Base URL: $($script:BASE_URL)" -ForegroundColor DarkGray
+            Write-Host "  /model aliases: sonnet=$($modelAliases.Sonnet), opus=$($modelAliases.Opus), haiku=$($modelAliases.Haiku)" -ForegroundColor DarkGray
 
-        Remove-Item Env:\ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
-        Remove-Item Env:\ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue
-
-        if ($script:AUTH_MODE -eq "auth_token") {
-            $env:ANTHROPIC_AUTH_TOKEN = $resolvedApiKey
-        } else {
-            $env:ANTHROPIC_API_KEY = $resolvedApiKey
-        }
-
-        Write-Host "Launching Claude with profile: $($script:PROFILE_NAME) -> $model" -ForegroundColor Cyan
-        Write-Host "  Base URL: $($script:BASE_URL)" -ForegroundColor DarkGray
-        Write-Host "  /model aliases: sonnet=$($modelAliases.Sonnet), opus=$($modelAliases.Opus), haiku=$($modelAliases.Haiku)" -ForegroundColor DarkGray
-
-        $claudeExe = Get-ClaudeExecutablePath
-        if (!$claudeExe) {
-            Write-Host "Error: Claude Code executable not found. Set CLAUDE_CODE_BIN or install the 'claude' command." -ForegroundColor Red
+            $claudeExe = Get-ClaudeExecutablePath
+            if (!$claudeExe) {
+                Write-Host "Error: Claude Code executable not found. Set CLAUDE_CODE_BIN or install the 'claude' command." -ForegroundColor Red
+                $global:LASTEXITCODE = 1
+            } else {
+                & $claudeExe @claudeArgs
+                $claudeExitCode = $global:LASTEXITCODE
+            }
+        } catch {
+            Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
             $global:LASTEXITCODE = 1
-        } else {
-            & $claudeExe @claudeArgs
+        } finally {
+            if ($proxyProcess -and !$proxyProcess.HasExited) {
+                Stop-ClaudeProxyProcess -ProcessInfo $proxyProcess
+                Write-Host "  Proxy stopped" -ForegroundColor DarkGray
+            }
+            Clear-ClaudeLaunchEnvironment
+            if ($null -ne $claudeExitCode) {
+                $global:LASTEXITCODE = $claudeExitCode
+            }
         }
-
-        if ($proxyProcess -and !$proxyProcess.HasExited) {
-            $proxyProcess.Kill()
-            Write-Host "  Proxy stopped" -ForegroundColor DarkGray
-        }
-
-        Remove-Item Env:\ANTHROPIC_BASE_URL -ErrorAction SilentlyContinue
-        Remove-Item Env:\ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
-        Remove-Item Env:\ANTHROPIC_AUTH_TOKEN -ErrorAction SilentlyContinue
-        Remove-Item Env:\ANTHROPIC_MODEL -ErrorAction SilentlyContinue
-        Remove-Item Env:\ANTHROPIC_DEFAULT_SONNET_MODEL -ErrorAction SilentlyContinue
-        Remove-Item Env:\ANTHROPIC_DEFAULT_OPUS_MODEL -ErrorAction SilentlyContinue
-        Remove-Item Env:\ANTHROPIC_DEFAULT_HAIKU_MODEL -ErrorAction SilentlyContinue
-        Remove-Item Env:\CC_PROVIDER -ErrorAction SilentlyContinue
-        Remove-Item Env:\CC_PROVIDER_MODE -ErrorAction SilentlyContinue
-        Remove-Item Env:\CC_PROFILE_BASE_URL -ErrorAction SilentlyContinue
-        Remove-Item Env:\CC_UPSTREAM_BASE_URL -ErrorAction SilentlyContinue
-        Remove-Item Env:\CC_DEFAULT_MODEL -ErrorAction SilentlyContinue
-        Remove-Item Env:\CC_MODELS -ErrorAction SilentlyContinue
     } else {
         Write-Host "Error: Model '$model' not found in profile '$($active['PROFILE'])'" -ForegroundColor Red
         Write-Host "Available models:" -ForegroundColor Yellow

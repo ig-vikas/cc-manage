@@ -3,7 +3,7 @@ const https = require('https');
 
 const PORT = parseInt(process.argv[2], 10) || 18100;
 const PROVIDER = process.env.CC_PROVIDER || 'opencode_nemotron';
-const DEFAULT_MODEL = 'nemotron-3-ultra-free';
+const DEFAULT_MODEL = process.env.CC_DEFAULT_MODEL || 'nemotron-3-ultra-free';
 const AVAILABLE_MODELS = (process.env.CC_MODELS || DEFAULT_MODEL)
   .split(',')
   .map(s => s.trim())
