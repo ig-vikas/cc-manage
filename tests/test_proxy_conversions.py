@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -351,7 +351,7 @@ def test_proxy_basic_endpoints() -> None:
         ("mistral-anthropic-proxy.js", {}),
         ("mistral-vibe-anthropic-proxy.js", {}),
         ("nvidia-anthropic-proxy.js", {}),
-        ("opencode-nemotron-proxy.js", {}),
+        ("opencode-zen-proxy.js", {}),
         ("openrouter-anthropic-normalizer.js", {}),
         (
             "openai-chat-proxy.js",
@@ -600,11 +600,11 @@ def test_groq_provider_limits() -> None:
         server.server_close()
 
 
-def test_opencode_nemotron_cleaning_and_streaming() -> None:
+def test_opencode_zen_cleaning_and_streaming() -> None:
     server, _thread, upstream_port = start_mock_opencode()
     proxy_port = free_port()
     process = start_proxy(
-        "opencode-nemotron-proxy.js",
+        "opencode-zen-proxy.js",
         proxy_port,
         {
             "CC_OPENCODE_CHAT_URL": f"http://{HOST}:{upstream_port}/zen/v1/chat/completions",
@@ -780,7 +780,7 @@ def test_proxy_source_contracts() -> None:
     ):
         require(marker in shared, f"Shared OpenAI proxy missing conversion marker: {marker}")
 
-    opencode = (PROXY_DIR / "opencode-nemotron-proxy.js").read_text(encoding="utf-8")
+    opencode = (PROXY_DIR / "opencode-zen-proxy.js").read_text(encoding="utf-8")
     for marker in (
         "https://opencode.ai/zen/v1/chat/completions",
         "function cleanOpenCodeRequest",
@@ -790,7 +790,7 @@ def test_proxy_source_contracts() -> None:
         "function writeFakeAnthropicStream",
         "content_block_delta",
     ):
-        require(marker in opencode, f"OpenCode Nemotron proxy missing conversion marker: {marker}")
+        require(marker in opencode, f"OpenCode Zen proxy missing conversion marker: {marker}")
 
     profiles_root = PROXY_DIR.parent
     providers = (profiles_root / "providers.ps1").read_text(encoding="utf-8")
@@ -811,11 +811,11 @@ def test_proxy_source_contracts() -> None:
         'Mode = "codestral-proxy"',
         'KeyName = "CODESTRAL_API_KEY"',
         'ProxyScript = \'Join-Path $PSScriptRoot "..\\proxy\\codestral-anthropic-proxy.js"\'',
-        'Id = "opencode_nemotron"',
-        'Mode = "opencode-nemotron-proxy"',
+        'Id = "opencode_zen"',
+        'Mode = "opencode-zen-proxy"',
         'AuthMode = "auth_token"',
         'KeyName = "OPENCODE_API_KEY"',
-        'ProxyScript = \'Join-Path $PSScriptRoot "..\\proxy\\opencode-nemotron-proxy.js"\'',
+        'ProxyScript = \'Join-Path $PSScriptRoot "..\\proxy\\opencode-zen-proxy.js"\'',
     ):
         require(marker in providers, f"Provider registry missing marker: {marker}")
 
@@ -827,7 +827,7 @@ def main() -> int:
         ("OpenAI response arrays/object args", test_openai_response_content_array_and_object_args),
         ("Hugging Face Kimi options", test_huggingface_kimi_options),
         ("Groq provider limits", test_groq_provider_limits),
-        ("OpenCode Nemotron cleaning/streaming", test_opencode_nemotron_cleaning_and_streaming),
+        ("OpenCode Zen cleaning/streaming", test_opencode_zen_cleaning_and_streaming),
         ("source contracts", test_proxy_source_contracts),
     ]
 

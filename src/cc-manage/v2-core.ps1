@@ -210,7 +210,7 @@ function Get-ProfileProviderGuess {
     if ($haystack -match "openrouter") { return "openrouter" }
     if ($haystack -match "deepseek") { return "deepseek" }
     if ($haystack -match "groq") { return "groq" }
-    if ($haystack -match "opencode|nemotron") { return "opencode_nemotron" }
+    if ($haystack -match "opencode|nemotron") { return "opencode_zen" }
     if ($haystack -match "codestral") { return "codestral" }
     if ($haystack -match "vibe") { return "mistral-vibe" }
     if ($haystack -match "mistral") { return "mistral" }
@@ -231,6 +231,7 @@ function Get-DefaultKeyNameForProvider {
         "openrouter" { "OPENROUTER_API_KEY" }
         "ollama-cloud" { "OLLAMA_API_KEY" }
         "groq" { "GROQ_API_KEY" }
+        "opencode_zen" { "OPENCODE_API_KEY" }
         "opencode_nemotron" { "OPENCODE_API_KEY" }
         "codestral" { "CODESTRAL_API_KEY" }
         "mistral-vibe" { "MISTRAL_VIBE_API_KEY" }
@@ -264,7 +265,7 @@ function Get-ProfileModeGuess {
     if ($ProxyScript -match "gemini") { return "gemini-proxy" }
     if ($ProxyScript -match "hug") { return "huggingface-proxy" }
     if ($ProxyScript -match "nvidia") { return "nvidia-proxy" }
-    if ($ProxyScript -match "opencode|nemotron") { return "opencode-nemotron-proxy" }
+    if ($ProxyScript -match "opencode|nemotron") { return "opencode-zen-proxy" }
     if ($ProxyScript -match "codestral") { return "codestral-proxy" }
     if ($ProxyScript -match "vibe") { return "mistral-vibe-proxy" }
     if ($ProxyScript -match "mistral") { return "mistral-proxy" }
@@ -278,7 +279,8 @@ function Get-ProfileModeGuess {
         "openrouter" { "anthropic-direct" }
         "nvidia-nim" { "nvidia-proxy" }
         "nvidia" { "nvidia-proxy" }
-        "opencode_nemotron" { "opencode-nemotron-proxy" }
+        "opencode_zen" { "opencode-zen-proxy" }
+        "opencode_nemotron" { "opencode-zen-proxy" }
         "codestral" { "codestral-proxy" }
         "mistral-vibe" { "mistral-vibe-proxy" }
         "mistral" { "mistral-proxy" }
